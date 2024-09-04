@@ -47,7 +47,7 @@ AUTH_VARIABLES = [
 ]
 
 def servicepytan_connect(
-    api_environment: str=ApiEnvironment.production,
+    api_environment: str=ApiEnvironment.PRODUCTION,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str="UTC", config_file:str=None):
     
