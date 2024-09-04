@@ -32,7 +32,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {response.text}")
     response.raise_for_status()
 
-  return response.json()
+  try:
+    # This may not always be JSON
+    return response.json()
+  except ValueError:
+    return response.content
 
 def check_default_options(options):
   """Add sensible defaults to options when not defined"""
