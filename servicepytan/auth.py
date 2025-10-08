@@ -123,7 +123,6 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
     try:
         response = requests.post(url, headers=headers, data=data)
         if response.status_code != requests.codes.ok:
-            # logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): {response.text}")
             response.raise_for_status()
 
         return response.json()
@@ -133,6 +132,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
             logger.warning(f"Error fetching auth token (url={url}, header={headers}, data={data}): Retrying...")
             continue
         else:
+            logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): {response.text}")
             raise e
 
 def get_auth_token(conn):

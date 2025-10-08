@@ -29,13 +29,12 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       TBD
   """
 
+  headers = get_auth_headers(conn)
   for i in range(retry_count):
     try:
-      headers = get_auth_headers(conn)
       response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
 
       if response.status_code != requests.codes.ok:
-        # logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {response.text}")
         response.raise_for_status()
 
       # This may not always be JSON
@@ -48,6 +47,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         logger.warning(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): Retrying...")
         continue
       else:
+        logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {response.text}")
         raise e
 
 def check_default_options(options):
