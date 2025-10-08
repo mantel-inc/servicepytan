@@ -8,7 +8,7 @@ import logging
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 
-def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}):
+def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3):
   """Makes the request to the API and returns JSON
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -37,6 +37,13 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     return response.json()
   except ValueError:
     return response.content
+  except Exception as e:
+    if retry_count > 0:
+      time.sleep(1)
+      logger.warning(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): Retrying...")
+      return request_json(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload, retry_count=retry_count - 1)
+    else:
+      raise e
 
 def check_default_options(options):
   """Add sensible defaults to options when not defined"""
