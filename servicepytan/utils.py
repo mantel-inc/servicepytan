@@ -8,7 +8,7 @@ import logging
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 
-def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}):
+def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3):
   """Makes the request to the API and returns JSON
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -19,6 +19,8 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       payload: A dictionary defining the data object to create or update
       conn: a dictionary containing the credential config.
       request_type: A string to define the REST endpoint type [GET, POST, PUT, PATCH, DEL].
+      json_payload: A dictionary defining the JSON payload to send
+      retry_count: An integer for the number of times to retry the request.
 
   Returns:
       JSON Object
@@ -26,17 +28,27 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
   Raises:
       TBD
   """
-  headers = get_auth_headers(conn)
-  response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
-  if response.status_code != requests.codes.ok:
-    logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {response.text}")
-    response.raise_for_status()
 
-  try:
-    # This may not always be JSON
-    return response.json()
-  except ValueError:
-    return response.content
+  headers = get_auth_headers(conn)
+  for i in range(retry_count):
+    try:
+      response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
+
+      if response.status_code != requests.codes.ok:
+        response.raise_for_status()
+
+      # This may not always be JSON
+      return response.json()
+    except ValueError:
+      return response.content
+    except Exception as e:
+      if i < retry_count:
+        time.sleep(1)
+        logger.warning(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): Retrying...")
+        continue
+      else:
+        logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {response.text}")
+        raise e
 
 def check_default_options(options):
   """Add sensible defaults to options when not defined"""

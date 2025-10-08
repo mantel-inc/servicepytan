@@ -1,5 +1,6 @@
 """Authenticating with ServiceTitan API"""
 
+import time
 import requests
 import json
 import os
@@ -90,7 +91,7 @@ def servicepytan_connect(
 
     return auth_config_object
 
-def request_auth_token(auth_root_url: str, client_id, client_secret):
+def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count=3):
   """Fetches Auth Token.
 
   Retrieves authentication token for completing a request against the API
@@ -98,6 +99,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret):
   Args:
       client_id: String, provided from the integration settings
       client_secret: String, provided from the integration settings
+      retry_count: Number of times to retry the request
 
   Returns:
       Authentication token
@@ -117,12 +119,21 @@ def request_auth_token(auth_root_url: str, client_id, client_secret):
     "client_secret": client_secret,
   }
 
-  response = requests.post(url, headers=headers, data=data)
-  if response.status_code != requests.codes.ok:
-    logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): {response.text}")
-    response.raise_for_status()
+  for i in range(retry_count):
+    try:
+        response = requests.post(url, headers=headers, data=data)
+        if response.status_code != requests.codes.ok:
+            response.raise_for_status()
 
-  return response.json()
+        return response.json()
+    except Exception as e:
+        if i < retry_count:
+            time.sleep(1)
+            logger.warning(f"Error fetching auth token (url={url}, header={headers}, data={data}): Retrying...")
+            continue
+        else:
+            logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): {response.text}")
+            raise e
 
 def get_auth_token(conn):
   """Fetches Auth Token using the config_file.
