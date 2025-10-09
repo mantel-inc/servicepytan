@@ -42,14 +42,14 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except ValueError:
       return response.content
     except Exception as e:
-      logger.warning(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): {e}")
+      error_log = f"Error fetching data (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       if i < retry_count - 1:
-        time.sleep(1)
-        logger.warning(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): Retrying ({i})...")
-        continue
+          time.sleep(1)
+          logger.warning(error_log)
+          continue
       else:
-        logger.error(f"Error fetching data (url={url}, heads={headers}, data={payload}, json={json_payload}): Content: {response.content}, Text: {response.text}")
-        raise e
+          logger.error(error_log)
+          raise e
 
 def check_default_options(options):
   """Add sensible defaults to options when not defined"""
