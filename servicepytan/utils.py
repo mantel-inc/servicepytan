@@ -42,7 +42,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except ValueError:
       return response.content
     except Exception as e:
-      error_log = f"Error fetching data (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       if i < retry_count - 1:
         time.sleep(1)
         logger.warning(error_log)
