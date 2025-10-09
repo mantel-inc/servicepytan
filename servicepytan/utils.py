@@ -34,7 +34,6 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     try:
       response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
 
-      logger.info(f"Response: request_url={url}, headers={headers}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
       if response.status_code != requests.codes.ok:
         response.raise_for_status()
 
@@ -43,7 +42,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except ValueError:
       return response.content
     except Exception as e:
-      error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      error_log = f"Error fetching data (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       if i < retry_count - 1:
         time.sleep(1)
         logger.warning(error_log)
