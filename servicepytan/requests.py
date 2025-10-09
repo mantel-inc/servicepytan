@@ -68,7 +68,7 @@ class Endpoint:
   def update(self, id, payload, modifier="", request_type="PUT"):
     """Method that corresponds to PUT or POST request for updating objects. Defaults to PUT"""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=modifier, conn=self.conn)
-    return request_json(url, options={}, json_payload=payload, conn=self.conn, request_type=request_type)
+    return request_json(url, options={}, payload=payload, conn=self.conn, request_type=request_type)
 
   def delete(self, id, modifier=""):
     """Method that corresponds to a DEL request for deleting objects"""

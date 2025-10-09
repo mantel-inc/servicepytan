@@ -119,6 +119,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
     "client_secret": client_secret,
   }
 
+  response = None
   for i in range(retry_count):
     try:
       response = requests.post(url, headers=headers, data=data)
@@ -127,7 +128,10 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
 
       return response.json()
     except Exception as e:
-      error_log = f"Error fetching auth token (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      if response:
+        error_log = f"Error fetching auth token (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      else:
+        error_log = f"Error fetching auth token (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
       if i < retry_count - 1:
         time.sleep(1)
         logger.warning(error_log)
