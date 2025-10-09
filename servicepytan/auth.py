@@ -127,12 +127,13 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
 
         return response.json()
     except Exception as e:
-        if i < retry_count:
+        logger.warning(f"Error fetching auth token (url={url}, header={headers}, data={data}): {e}")
+        if i < retry_count - 1:
             time.sleep(1)
-            logger.warning(f"Error fetching auth token (url={url}, header={headers}, data={data}): Retrying...")
+            logger.warning(f"Error fetching auth token (url={url}, header={headers}, data={data}): Retrying ({i})...")
             continue
         else:
-            logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): {response.text}")
+            logger.error(f"Error fetching auth token (url={url}, header={headers}, data={data}): Content: {response.content}, Text: {response.text}")
             raise e
 
 def get_auth_token(conn):
