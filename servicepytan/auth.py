@@ -121,20 +121,20 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
 
   for i in range(retry_count):
     try:
-        response = requests.post(url, headers=headers, data=data)
-        if response.status_code != requests.codes.ok:
-            response.raise_for_status()
+      response = requests.post(url, headers=headers, data=data)
+      if response.status_code != requests.codes.ok:
+        response.raise_for_status()
 
-        return response.json()
+      return response.json()
     except Exception as e:
-        error_log = f"Error fetching auth token (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
-        if i < retry_count - 1:
-            time.sleep(1)
-            logger.warning(error_log)
-            continue
-        else:
-            logger.error(error_log)
-            raise e
+      error_log = f"Error fetching auth token (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      if i < retry_count - 1:
+        time.sleep(1)
+        logger.warning(error_log)
+        continue
+      else:
+        logger.error(error_log)
+        raise e
 
 def get_auth_token(conn):
   """Fetches Auth Token using the config_file.

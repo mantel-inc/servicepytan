@@ -44,12 +44,12 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except Exception as e:
       error_log = f"Error fetching data (url={url}, header={headers}, data={data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       if i < retry_count - 1:
-          time.sleep(1)
-          logger.warning(error_log)
-          continue
+        time.sleep(1)
+        logger.warning(error_log)
+        continue
       else:
-          logger.error(error_log)
-          raise e
+        logger.error(error_log)
+        raise e
 
 def check_default_options(options):
   """Add sensible defaults to options when not defined"""
