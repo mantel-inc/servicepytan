@@ -30,6 +30,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
   """
 
   headers = get_auth_headers(conn)
+  response = None
   for i in range(retry_count):
     try:
       response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
@@ -43,7 +44,10 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except ValueError:
       return response.content
     except Exception as e:
-      error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+      if response is None:
+        error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
+      else:
+        error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       if i < retry_count - 1:
         time.sleep(1)
         logger.warning(error_log)
