@@ -48,12 +48,12 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
       else:
         error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+
+      logger.warning(error_log)
       if i < retry_count - 1:
         time.sleep(1)
-        logger.warning(error_log)
         continue
       else:
-        logger.error(error_log)
         raise e
 
 def check_default_options(options):
