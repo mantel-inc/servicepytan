@@ -54,6 +54,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         time.sleep(1)
         continue
       else:
+        e.response = response
         raise e
 
 def check_default_options(options):
