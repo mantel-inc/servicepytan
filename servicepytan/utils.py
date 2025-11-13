@@ -8,7 +8,7 @@ import logging
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 
-def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3):
+def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3, verbose=True):
   """Makes the request to the API and returns JSON
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -35,7 +35,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     try:
       response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
 
-      logger.info(f"Response: request_url={url}, headers={headers}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
+      if verbose:
+        logger.info(f"Response: request_url={url}, headers={headers}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
+      else:
+        content_length = len(response.content) if response and response.content else 0
+        logger.info(f"Response: request_url={url}, headers={headers} => status_code={response.status_code}, content_length={content_length} bytes")
       if response.status_code != requests.codes.ok:
         response.raise_for_status()
 
@@ -47,7 +51,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       if response is None:
         error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
       else:
-        error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+        if verbose:
+          error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+        else:
+          content_length = len(response.content) if response and response.content else 0
+          error_log = f"Error fetching data (url={url}, header={headers}, RETRY=({i + 1} / {retry_count})): content_length: {content_length} bytes, error: {e}"
 
       logger.warning(error_log)
       if i < retry_count - 1:
@@ -139,7 +147,7 @@ def sleep_with_countdown(sleep_time):
   logger.info("")
   pass
 
-def request_json_with_retry(url, options={}, payload="", conn=None, request_type="GET", json_payload=""):
+def request_json_with_retry(url, options={}, payload="", conn=None, request_type="GET", json_payload="", verbose=True):
   """Makes the request to the API and returns JSON with a retry
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -159,12 +167,12 @@ def request_json_with_retry(url, options={}, payload="", conn=None, request_type
   Raises:
       TBD
   """
-  response = request_json(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload)
+  response = request_json(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload, verbose=verbose)
   if "traceId" in response:
     if response['status'] == 429:
         sleep_time = response['title'].split(" ")[-2]
         logger.warning("Rate Limit Exceeded. Retrying in {} seconds...".format(sleep_time))
         sleep_with_countdown(int(sleep_time))
-        response = request_json_with_retry(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload)
+        response = request_json_with_retry(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload, verbose=verbose)
   
   return response
