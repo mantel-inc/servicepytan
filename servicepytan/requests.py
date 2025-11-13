@@ -25,11 +25,11 @@ class Endpoint:
     self.conn = conn
 
   # Main Request Types
-  def get_one(self, id, modifier="", query={}):
+  def get_one(self, id, modifier="", query={}, verbose=True):
     """Retrieve one record using the record id. Modifier is used for further endpoints."""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=modifier, conn=self.conn)
     options = check_default_options(query)
-    return request_json(url, options=options, payload="", conn=self.conn, request_type="GET")
+    return request_json(url, options=options, payload="", conn=self.conn, request_type="GET", verbose=verbose)
 
   def get_many(self, query={}, id="", modifier=""):
     """
