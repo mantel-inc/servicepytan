@@ -128,7 +128,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
 
       return response.json()
     except Exception as e:
-      safe_data = {k: ("********" if k == "client_secret" else v) for k, v in data.items()} if isinstance(data, dict) else data
+      safe_data = {k: ("********" if k == "client_secret" else v) for k, v in data.items()}
       if response:
         error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
       else:
