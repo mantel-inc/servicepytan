@@ -1,6 +1,7 @@
 """Authenticating with ServiceTitan API"""
 
 import time
+import threading
 import requests
 import json
 import os
@@ -47,12 +48,30 @@ AUTH_VARIABLES = [
     'SERVICETITAN_API_ENVIRONMENT'  # One of values of the ApiEnvironment enum
 ]
 
+TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS = 60
+
+
+class ServiceTitanConnection(dict):
+  """Connection configuration plus a process-local OAuth token cache.
+
+  ``dict`` compatibility is intentional: existing servicepytan callers access
+  connection values with ``conn["..."]``. Runtime token state lives on private
+  attributes so it cannot be serialized or accidentally logged with the public
+  credential configuration.
+  """
+
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self._auth_token = None
+    self._auth_token_valid_until = 0.0
+    self._auth_token_lock = threading.Lock()
+
 def servicepytan_connect(
     api_environment: str=ApiEnvironment.PRODUCTION,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str="UTC", config_file:str=None):
     
-    auth_config_object = {
+    auth_config_object = ServiceTitanConnection({
         "SERVICETITAN_APP_KEY": app_key,
         "SERVICETITAN_TENANT_ID": tenant_id,
         "SERVICETITAN_CLIENT_ID": client_id,
@@ -64,7 +83,7 @@ def servicepytan_connect(
 
         "auth_root": get_auth_root_url(api_environment),
         "api_root": get_api_root_url(api_environment),
-    }
+    })
 
 
     # First check if the config_file is provided
@@ -130,7 +149,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
     except Exception as e:
       safe_data = {k: ("********" if k == "client_secret" else v) for k, v in data.items()}
       if response:
-        error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+        error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): status_code={response.status_code}, error: {e}"
       else:
         error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
 
@@ -141,10 +160,50 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
       else:
         raise e
 
-def get_auth_token(conn):
-  """Fetches Auth Token using the config_file.
+def _get_cached_auth_token(conn):
+  token = getattr(conn, '_auth_token', None)
+  valid_until = getattr(conn, '_auth_token_valid_until', 0.0)
+  if token is not None and time.monotonic() < valid_until:
+    return token
+  return None
 
-  Retrives the CLIENT_ID and CLIENT_SECRET entries from config_file.
+
+def _cache_auth_token(conn, token_response):
+  token = token_response['access_token']
+  try:
+    expires_in = max(0.0, float(token_response.get('expires_in', 0)))
+  except (TypeError, ValueError):
+    expires_in = 0.0
+
+  # Use a full minute for normal ServiceTitan tokens (currently 15 minutes),
+  # but keep a proportional margin for unusually short-lived test/future tokens.
+  safety_margin = min(TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS, expires_in * 0.1)
+  valid_until = time.monotonic() + max(0.0, expires_in - safety_margin)
+
+  if hasattr(conn, '_auth_token'):
+    conn._auth_token = token
+    conn._auth_token_valid_until = valid_until
+  return token
+
+
+def invalidate_auth_token(conn, rejected_token=None):
+  """Invalidate a cached token, without discarding a newer concurrent refresh."""
+  lock = getattr(conn, '_auth_token_lock', None)
+  if lock is None:
+    return
+
+  with lock:
+    if rejected_token is None or conn._auth_token == rejected_token:
+      conn._auth_token = None
+      conn._auth_token_valid_until = 0.0
+
+
+def get_auth_token(conn):
+  """Return a cached OAuth token, refreshing it when it is near expiration.
+
+  Connections returned by :func:`servicepytan_connect` single-flight token
+  refreshes across threads. Plain dictionaries remain supported and retain the
+  legacy behavior of fetching a token for each call.
 
   Args:
       config_file: String, path to the config file defaults to 'servicepytan_config.json'
@@ -155,10 +214,23 @@ def get_auth_token(conn):
   Raises:
       TBD
   """
-  # Read File
+  cached_token = _get_cached_auth_token(conn)
+  if cached_token is not None:
+    return cached_token
+
   client_id = conn['SERVICETITAN_CLIENT_ID']
   client_secret = conn['SERVICETITAN_CLIENT_SECRET']
-  return request_auth_token(conn["auth_root"], client_id, client_secret)["access_token"]
+  lock = getattr(conn, '_auth_token_lock', None)
+  if lock is None:
+    return request_auth_token(conn["auth_root"], client_id, client_secret)["access_token"]
+
+  with lock:
+    # Another thread may have refreshed while this caller waited for the lock.
+    cached_token = _get_cached_auth_token(conn)
+    if cached_token is not None:
+      return cached_token
+    token_response = request_auth_token(conn["auth_root"], client_id, client_secret)
+    return _cache_auth_token(conn, token_response)
 
 def get_app_key(conn):
   """Fetches App Key from the config_file.

@@ -28,6 +28,7 @@ Features
 
 * Simple Syntax for getting data from standard RESTful endpoints from ServiceTitan
 * Ability to extract custom report data and automatically make calls for additional data
+* Thread-safe OAuth token reuse and automatic refresh for ServiceTitan connections
 
 Credits
 -------

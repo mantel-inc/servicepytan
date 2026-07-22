@@ -1,7 +1,7 @@
 """Utility Functions for Supporting Other Modules"""
 import requests
 import time
-from servicepytan.auth import get_auth_headers, get_tenant_id
+from servicepytan.auth import get_auth_headers, get_tenant_id, invalidate_auth_token
 
 import logging
 
@@ -30,35 +30,56 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
   """
 
   headers = get_auth_headers(conn)
+  auth_retry_attempted = False
   response = None
-  for i in range(retry_count):
+  attempt = 0
+  while attempt < retry_count:
+    response = None
     try:
       response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
 
       if verbose:
-        logger.info(f"Response: request_url={url}, headers={headers}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
+        logger.info(f"Response: request_url={url}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
       else:
         content_length = len(response.content) if response and response.content else 0
-        logger.info(f"Response: request_url={url}, headers={headers} => status_code={response.status_code}, content_length={content_length} bytes")
+        logger.info(f"Response: request_url={url} => status_code={response.status_code}, content_length={content_length} bytes")
+
+      # A 401 response means ServiceTitan rejected the request before applying
+      # it, so refreshing the token and replaying once is safe for every method,
+      # including non-idempotent POST/PUT calls.
+      if response.status_code == requests.codes.unauthorized:
+        rejected_token = headers.get('Authorization')
+        invalidate_auth_token(conn, rejected_token=rejected_token)
+        if not auth_retry_attempted:
+          headers = get_auth_headers(conn)
+          auth_retry_attempted = True
+          continue
       if response.status_code != requests.codes.ok:
         response.raise_for_status()
 
       # This may not always be JSON
-      return response.json()
-    except ValueError:
-      return response.content
+      try:
+        return response.json()
+      except ValueError:
+        return response.content
     except Exception as e:
+      # Never retry a second 401 through the generic retry loop. Authentication
+      # recovery above is deliberately limited to one fresh-token attempt.
+      if response is not None and response.status_code == requests.codes.unauthorized:
+        e.response = response
+        raise e
+      attempt += 1
       if response is None:
-        error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
+        error_log = f"Error fetching data (url={url}, payload={payload}, RETRY=({attempt} / {retry_count})): Failed to get a response. error: {e}"
       else:
         if verbose:
-          error_log = f"Error fetching data (url={url}, header={headers}, payload={payload}, RETRY=({i + 1} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
+          error_log = f"Error fetching data (url={url}, payload={payload}, RETRY=({attempt} / {retry_count})): content: {response.content}, text: {response.text}, error: {e}"
         else:
           content_length = len(response.content) if response and response.content else 0
-          error_log = f"Error fetching data (url={url}, header={headers}, RETRY=({i + 1} / {retry_count})): content_length: {content_length} bytes, error: {e}"
+          error_log = f"Error fetching data (url={url}, RETRY=({attempt} / {retry_count})): content_length: {content_length} bytes, error: {e}"
 
       logger.warning(error_log)
-      if i < retry_count - 1:
+      if attempt < retry_count:
         time.sleep(1)
         continue
       else:
