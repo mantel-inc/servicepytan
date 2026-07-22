@@ -1,7 +1,12 @@
 """Utility Functions for Supporting Other Modules"""
 import requests
 import time
-from servicepytan.auth import get_auth_headers, get_tenant_id, invalidate_auth_token
+from servicepytan.auth import (
+  ServiceTitanConnection,
+  get_auth_headers,
+  get_tenant_id,
+  invalidate_auth_token,
+)
 
 import logging
 
@@ -17,7 +22,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       url: A string with the full URL request
       options: A dictionary defining the parameters to add to the url for filtering
       payload: A dictionary defining the data object to create or update
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection or legacy credential mapping.
       request_type: A string to define the REST endpoint type [GET, POST, PUT, PATCH, DEL].
       json_payload: A dictionary defining the JSON payload to send
       retry_count: An integer for the number of times to retry the request.
@@ -29,7 +34,10 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       TBD
   """
 
-  headers = get_auth_headers(conn)
+  if isinstance(conn, ServiceTitanConnection):
+    headers = conn.get_auth_headers()
+  else:
+    headers = get_auth_headers(conn)
   auth_retry_attempted = False
   response = None
   attempt = 0
@@ -49,9 +57,15 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       # including non-idempotent POST/PUT calls.
       if response.status_code == requests.codes.unauthorized:
         rejected_token = headers.get('Authorization')
-        invalidate_auth_token(conn, rejected_token=rejected_token)
+        if isinstance(conn, ServiceTitanConnection):
+          conn.invalidate_auth_token(rejected_token=rejected_token)
+        else:
+          invalidate_auth_token(conn, rejected_token=rejected_token)
         if not auth_retry_attempted:
-          headers = get_auth_headers(conn)
+          if isinstance(conn, ServiceTitanConnection):
+            headers = conn.get_auth_headers()
+          else:
+            headers = get_auth_headers(conn)
           auth_retry_attempted = True
           continue
       if response.status_code != requests.codes.ok:
@@ -104,7 +118,7 @@ def endpoint_url(folder, endpoint, id="", modifier="", conn=None, tenant_id=""):
       endpoint: A string indicating the endpoint you want to address.
       id: A string for the id of the endpoint object you're addressing.
       modifier: A string to modify the url to address the additional endpoint.
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection or legacy credential mapping.
       tenant_id: A string to manually adjust the tenant id.
 
   Returns:
@@ -115,9 +129,16 @@ def endpoint_url(folder, endpoint, id="", modifier="", conn=None, tenant_id=""):
   """  
   # Adds ability to manually switch up the Tenant ID for apps that have multiples
   if tenant_id == "":
-    tenant_id = get_tenant_id(conn)
+    if isinstance(conn, ServiceTitanConnection):
+      tenant_id = conn.tenant_id
+    else:
+      tenant_id = get_tenant_id(conn)
 
-  url = f"{conn['api_root']}/{folder}/v2/tenant/{tenant_id}/{endpoint}"
+  if isinstance(conn, ServiceTitanConnection):
+    api_root = conn.api_root
+  else:
+    api_root = conn['api_root']
+  url = f"{api_root}/{folder}/v2/tenant/{tenant_id}/{endpoint}"
   if id != "": url = f"{url}/{id}"
   if modifier != "": url = f"{url}/{modifier}"
   return url
@@ -148,17 +169,14 @@ def get_timezone_by_file(conn=None):
   """Retrieves timezone from the configuration file.
 
   Args:
-      conn: a dictionary containing the credential config
+      conn: a ServiceTitanConnection or legacy credential mapping.
 
   Returns:
       Timezone string
   """    
-  # Read File
-  if "SERVICETITAN_TIMEZONE" in conn:
-    timezone = config['SERVICETITAN_TIMEZONE']
-  else:
-    timezone = "UTC"
-  return timezone
+  if isinstance(conn, ServiceTitanConnection):
+    return conn.timezone
+  return conn.get("SERVICETITAN_TIMEZONE", "UTC")
 
 def sleep_with_countdown(sleep_time):
   """Sleeps for a given amount of time with a countdown"""
@@ -177,7 +195,7 @@ def request_json_with_retry(url, options={}, payload="", conn=None, request_type
       url: A string with the full URL request
       options: A dictionary defining the parameters to add to the url for filtering
       payload: A dictionary defining the data object to create or update
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection or legacy credential mapping.
       request_type: A string to define the REST endpoint type [GET, POST, PUT, PATCH, DEL].
       retry_count: An integer for the number of times to retry the request.
       sleep_time: An integer for the number of seconds to sleep between retries.

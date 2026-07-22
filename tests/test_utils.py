@@ -6,8 +6,8 @@ from unittest.mock import call, patch
 
 import requests
 
-from servicepytan.auth import ServiceTitanConnection
-from servicepytan.utils import request_json
+from servicepytan.auth import ApiEnvironment, ServiceTitanConnection
+from servicepytan.utils import endpoint_url, get_timezone_by_file, request_json
 
 
 def make_response(status_code, body):
@@ -18,18 +18,43 @@ def make_response(status_code, body):
     return response
 
 
+class TestServiceTitanConnectionUtilities(unittest.TestCase):
+    def setUp(self):
+        self.conn = ServiceTitanConnection(
+            api_environment=ApiEnvironment.INTEGRATION,
+            client_id="client-id",
+            client_secret="client-secret",
+            app_key="app-key",
+            tenant_id="tenant-id",
+            timezone="America/New_York",
+        )
+
+    def test_endpoint_url_uses_connection_properties(self):
+        self.assertEqual(
+            endpoint_url("jpm", "jobs", conn=self.conn),
+            "https://api-integration.servicetitan.io/jpm/v2/tenant/tenant-id/jobs",
+        )
+
+    def test_timezone_uses_connection_property(self):
+        self.assertEqual(
+            get_timezone_by_file(self.conn),
+            "America/New_York",
+        )
+
+
 class TestRequestJsonAuthentication(unittest.TestCase):
     @patch("servicepytan.auth.request_auth_token")
     @patch("servicepytan.utils.requests.request")
     def test_401_invalidates_cached_token_and_uses_refreshed_token(
         self, mock_request, mock_request_auth_token,
     ):
-        conn = ServiceTitanConnection({
-            "SERVICETITAN_CLIENT_ID": "client-id",
-            "SERVICETITAN_CLIENT_SECRET": "client-secret",
-            "SERVICETITAN_APP_KEY": "app-key",
-            "auth_root": "https://auth.example.com",
-        })
+        conn = ServiceTitanConnection(
+            api_environment="integration",
+            client_id="client-id",
+            client_secret="client-secret",
+            app_key="app-key",
+            tenant_id="tenant-id",
+        )
         mock_request_auth_token.side_effect = [
             {"access_token": "expired-token", "expires_in": 900},
             {"access_token": "fresh-token", "expires_in": 900},

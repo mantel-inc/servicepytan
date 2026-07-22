@@ -5,6 +5,7 @@ import threading
 import requests
 import json
 import os
+from collections.abc import Mapping
 from dotenv import load_dotenv
 from enum import StrEnum
 
@@ -51,27 +52,110 @@ AUTH_VARIABLES = [
 TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS = 60
 
 
-class ServiceTitanConnection(dict):
-  """Connection configuration plus a process-local OAuth token cache.
+class ServiceTitanConnection(Mapping):
+  """ServiceTitan configuration and process-local OAuth lifecycle."""
 
-  ``dict`` compatibility is intentional: existing servicepytan callers access
-  connection values with ``conn["..."]``. Runtime token state lives on private
-  attributes so it cannot be serialized or accidentally logged with the public
-  credential configuration.
-  """
+  _KEY_TO_ATTRIBUTE = {
+      "SERVICETITAN_APP_KEY": "app_key",
+      "SERVICETITAN_TENANT_ID": "tenant_id",
+      "SERVICETITAN_CLIENT_ID": "client_id",
+      "SERVICETITAN_CLIENT_SECRET": "client_secret",
+      "SERVICETITAN_APP_ID": "app_id",
+      "SERVICETITAN_TIMEZONE": "timezone",
+      "SERVICETITAN_API_ENVIRONMENT": "api_environment",
+      "auth_root": "auth_root",
+      "api_root": "api_root",
+  }
 
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
+  def __init__(self, api_environment, app_key, tenant_id, client_id,
+               client_secret, app_id=None, timezone="UTC"):
+    self.api_environment = api_environment
+    self.app_key = app_key
+    self.tenant_id = tenant_id
+    self.client_id = client_id
+    self.client_secret = client_secret
+    self.app_id = app_id
+    self.timezone = timezone
+    self.auth_root = get_auth_root_url(api_environment)
+    self.api_root = get_api_root_url(api_environment)
+
     self._auth_token = None
     self._auth_token_valid_until = 0.0
     self._auth_token_lock = threading.Lock()
+
+  def __getitem__(self, key):
+    try:
+      attribute = self._KEY_TO_ATTRIBUTE[key]
+    except KeyError:
+      raise KeyError(key)
+    return getattr(self, attribute)
+
+  def __iter__(self):
+    return iter(self._KEY_TO_ATTRIBUTE)
+
+  def __len__(self):
+    return len(self._KEY_TO_ATTRIBUTE)
+
+  def _get_cached_auth_token(self):
+    if (self._auth_token is not None and
+        time.monotonic() < self._auth_token_valid_until):
+      return self._auth_token
+    return None
+
+  def _cache_auth_token(self, token_response):
+    token = token_response['access_token']
+    try:
+      expires_in = max(0.0, float(token_response.get('expires_in', 0)))
+    except (TypeError, ValueError):
+      expires_in = 0.0
+
+    # Use a full minute for normal ServiceTitan tokens (currently 15 minutes),
+    # but keep a proportional margin for unusually short-lived tokens.
+    safety_margin = min(
+        TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS, expires_in * 0.1,
+    )
+    self._auth_token = token
+    self._auth_token_valid_until = (
+        time.monotonic() + max(0.0, expires_in - safety_margin)
+    )
+    return token
+
+  def get_auth_token(self):
+    """Return a cached OAuth token, refreshing near expiration."""
+    cached_token = self._get_cached_auth_token()
+    if cached_token is not None:
+      return cached_token
+
+    with self._auth_token_lock:
+      # Another thread may have refreshed while this caller waited.
+      cached_token = self._get_cached_auth_token()
+      if cached_token is not None:
+        return cached_token
+      token_response = request_auth_token(
+          self.auth_root, self.client_id, self.client_secret,
+      )
+      return self._cache_auth_token(token_response)
+
+  def invalidate_auth_token(self, rejected_token=None):
+    """Invalidate a token without discarding a newer concurrent refresh."""
+    with self._auth_token_lock:
+      if rejected_token is None or self._auth_token == rejected_token:
+        self._auth_token = None
+        self._auth_token_valid_until = 0.0
+
+  def get_auth_headers(self):
+    """Return authorization headers for a ServiceTitan API request."""
+    return {
+        "Authorization": self.get_auth_token(),
+        "ST-App-Key": self.app_key,
+    }
 
 def servicepytan_connect(
     api_environment: str=ApiEnvironment.PRODUCTION,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str="UTC", config_file:str=None):
     
-    auth_config_object = ServiceTitanConnection({
+    auth_config = {
         "SERVICETITAN_APP_KEY": app_key,
         "SERVICETITAN_TENANT_ID": tenant_id,
         "SERVICETITAN_CLIENT_ID": client_id,
@@ -81,19 +165,16 @@ def servicepytan_connect(
 
         'SERVICETITAN_API_ENVIRONMENT': api_environment,
 
-        "auth_root": get_auth_root_url(api_environment),
-        "api_root": get_api_root_url(api_environment),
-    })
+    }
 
 
     # First check if the config_file is provided
     if config_file:
         logger.info("Setting auth config from file...")
-        f = open(config_file)
-        creds = json.load(f)
+        with open(config_file) as config:
+            creds = json.load(config)
         for var in AUTH_VARIABLES:
-            auth_config_object[var] = creds.get(var, '')
-        f.close()
+            auth_config[var] = creds.get(var, '')
 
     # If not, check if the environment variables are set
     # AFAICT, app_id is never used in the rest of the code, so it isn't necessary
@@ -103,12 +184,23 @@ def servicepytan_connect(
         for var in AUTH_VARIABLES:
             auth_var = os.environ.get(var)
             if auth_var:
-                auth_config_object[var] = auth_var
+                auth_config[var] = auth_var
             else:
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
-                auth_config_object[var] = ''
+                auth_config[var] = ''
 
-    return auth_config_object
+    resolved_environment = (
+        auth_config['SERVICETITAN_API_ENVIRONMENT'] or api_environment
+    )
+    return ServiceTitanConnection(
+        api_environment=resolved_environment,
+        app_key=auth_config['SERVICETITAN_APP_KEY'],
+        tenant_id=auth_config['SERVICETITAN_TENANT_ID'],
+        client_id=auth_config['SERVICETITAN_CLIENT_ID'],
+        client_secret=auth_config['SERVICETITAN_CLIENT_SECRET'],
+        app_id=auth_config['SERVICETITAN_APP_ID'],
+        timezone=auth_config['SERVICETITAN_TIMEZONE'],
+    )
 
 def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count=3):
   """Fetches Auth Token.
@@ -160,77 +252,23 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
       else:
         raise e
 
-def _get_cached_auth_token(conn):
-  token = getattr(conn, '_auth_token', None)
-  valid_until = getattr(conn, '_auth_token_valid_until', 0.0)
-  if token is not None and time.monotonic() < valid_until:
-    return token
-  return None
-
-
-def _cache_auth_token(conn, token_response):
-  token = token_response['access_token']
-  try:
-    expires_in = max(0.0, float(token_response.get('expires_in', 0)))
-  except (TypeError, ValueError):
-    expires_in = 0.0
-
-  # Use a full minute for normal ServiceTitan tokens (currently 15 minutes),
-  # but keep a proportional margin for unusually short-lived test/future tokens.
-  safety_margin = min(TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS, expires_in * 0.1)
-  valid_until = time.monotonic() + max(0.0, expires_in - safety_margin)
-
-  if hasattr(conn, '_auth_token'):
-    conn._auth_token = token
-    conn._auth_token_valid_until = valid_until
-  return token
-
-
 def invalidate_auth_token(conn, rejected_token=None):
-  """Invalidate a cached token, without discarding a newer concurrent refresh."""
-  lock = getattr(conn, '_auth_token_lock', None)
-  if lock is None:
-    return
-
-  with lock:
-    if rejected_token is None or conn._auth_token == rejected_token:
-      conn._auth_token = None
-      conn._auth_token_valid_until = 0.0
+  """Compatibility wrapper for invalidating a connection's cached token."""
+  if isinstance(conn, ServiceTitanConnection):
+    conn.invalidate_auth_token(rejected_token=rejected_token)
 
 
 def get_auth_token(conn):
-  """Return a cached OAuth token, refreshing it when it is near expiration.
+  """Compatibility wrapper for returning a connection's OAuth token."""
+  if isinstance(conn, ServiceTitanConnection):
+    return conn.get_auth_token()
 
-  Connections returned by :func:`servicepytan_connect` single-flight token
-  refreshes across threads. Plain dictionaries remain supported and retain the
-  legacy behavior of fetching a token for each call.
-
-  Args:
-      config_file: String, path to the config file defaults to 'servicepytan_config.json'
-
-  Returns:
-      Authentication token
-
-  Raises:
-      TBD
-  """
-  cached_token = _get_cached_auth_token(conn)
-  if cached_token is not None:
-    return cached_token
-
+  # Plain dictionaries retain the legacy fetch-per-call behavior.
   client_id = conn['SERVICETITAN_CLIENT_ID']
   client_secret = conn['SERVICETITAN_CLIENT_SECRET']
-  lock = getattr(conn, '_auth_token_lock', None)
-  if lock is None:
-    return request_auth_token(conn["auth_root"], client_id, client_secret)["access_token"]
-
-  with lock:
-    # Another thread may have refreshed while this caller waited for the lock.
-    cached_token = _get_cached_auth_token(conn)
-    if cached_token is not None:
-      return cached_token
-    token_response = request_auth_token(conn["auth_root"], client_id, client_secret)
-    return _cache_auth_token(conn, token_response)
+  return request_auth_token(
+      conn["auth_root"], client_id, client_secret,
+  )["access_token"]
 
 def get_app_key(conn):
   """Fetches App Key from the config_file.
@@ -246,8 +284,9 @@ def get_app_key(conn):
   Raises:
       TBD
   """
-  app_key = conn['SERVICETITAN_APP_KEY']
-  return app_key
+  if isinstance(conn, ServiceTitanConnection):
+    return conn.app_key
+  return conn['SERVICETITAN_APP_KEY']
 
 def get_tenant_id(conn):
   """Fetches Tenant ID from the config_file.
@@ -263,8 +302,9 @@ def get_tenant_id(conn):
   Raises:
       TBD
   """
-  tenant_id = conn['SERVICETITAN_TENANT_ID']
-  return tenant_id 
+  if isinstance(conn, ServiceTitanConnection):
+    return conn.tenant_id
+  return conn['SERVICETITAN_TENANT_ID']
 
 def get_auth_headers(conn):
   """Generates the Authentication Headers for each API request
@@ -280,7 +320,9 @@ def get_auth_headers(conn):
   Raises:
       TBD
   """
+  if isinstance(conn, ServiceTitanConnection):
+    return conn.get_auth_headers()
   return {
       "Authorization": get_auth_token(conn),
-      "ST-App-Key": get_app_key(conn)
+      "ST-App-Key": get_app_key(conn),
   }

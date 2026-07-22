@@ -1,5 +1,6 @@
 """Tests for servicepytan.auth module."""
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch, MagicMock
@@ -15,18 +16,17 @@ from servicepytan.auth import (
 
 
 def make_connection():
-    return ServiceTitanConnection({
-        "SERVICETITAN_CLIENT_ID": "client-id",
-        "SERVICETITAN_CLIENT_SECRET": "client-secret",
-        "SERVICETITAN_APP_KEY": "app-key",
-        "SERVICETITAN_TENANT_ID": "tenant-id",
-        "auth_root": "https://auth.example.com",
-        "api_root": "https://api.example.com",
-    })
+    return ServiceTitanConnection(
+        api_environment=ApiEnvironment.INTEGRATION,
+        client_id="client-id",
+        client_secret="client-secret",
+        app_key="app-key",
+        tenant_id="tenant-id",
+    )
 
 
 class TestAuthTokenCaching(unittest.TestCase):
-    def test_servicepytan_connect_returns_dict_compatible_connection(self):
+    def test_servicepytan_connect_returns_mapping_compatible_connection(self):
         conn = servicepytan_connect(
             api_environment=ApiEnvironment.INTEGRATION,
             app_key="app-key",
@@ -35,9 +35,12 @@ class TestAuthTokenCaching(unittest.TestCase):
             client_secret="client-secret",
         )
 
-        self.assertIsInstance(conn, dict)
+        self.assertIsInstance(conn, Mapping)
         self.assertIsInstance(conn, ServiceTitanConnection)
+        self.assertNotIsInstance(conn, dict)
         self.assertEqual(conn["SERVICETITAN_TENANT_ID"], "tenant-id")
+        self.assertEqual(conn.tenant_id, "tenant-id")
+        self.assertEqual(dict(conn)["SERVICETITAN_APP_KEY"], "app-key")
         self.assertNotIn("_auth_token", conn)
 
     @patch("servicepytan.auth.request_auth_token")
@@ -50,14 +53,14 @@ class TestAuthTokenCaching(unittest.TestCase):
 
         with patch("servicepytan.auth.time.monotonic") as monotonic:
             monotonic.return_value = 100
-            self.assertEqual(get_auth_token(conn), "token-one")
+            self.assertEqual(conn.get_auth_token(), "token-one")
 
             # A 900-second token is considered stale 60 seconds early.
             monotonic.return_value = 939
-            self.assertEqual(get_auth_token(conn), "token-one")
+            self.assertEqual(conn.get_auth_token(), "token-one")
 
             monotonic.return_value = 940
-            self.assertEqual(get_auth_token(conn), "token-two")
+            self.assertEqual(conn.get_auth_token(), "token-two")
 
         self.assertEqual(mock_request_auth_token.call_count, 2)
 
@@ -70,7 +73,7 @@ class TestAuthTokenCaching(unittest.TestCase):
         conn = make_connection()
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            tokens = list(executor.map(lambda _: get_auth_token(conn), range(20)))
+            tokens = list(executor.map(lambda _: conn.get_auth_token(), range(20)))
 
         self.assertEqual(tokens, ["shared-token"] * 20)
         mock_request_auth_token.assert_called_once()
@@ -86,7 +89,7 @@ class TestAuthTokenCaching(unittest.TestCase):
         conn._auth_token_valid_until = 0
 
         with ThreadPoolExecutor(max_workers=10) as executor:
-            tokens = list(executor.map(lambda _: get_auth_token(conn), range(20)))
+            tokens = list(executor.map(lambda _: conn.get_auth_token(), range(20)))
 
         self.assertEqual(tokens, ["refreshed-token"] * 20)
         mock_request_auth_token.assert_called_once()
@@ -100,19 +103,48 @@ class TestAuthTokenCaching(unittest.TestCase):
         conn = make_connection()
 
         with self.assertRaisesRegex(RuntimeError, "auth unavailable"):
-            get_auth_token(conn)
+            conn.get_auth_token()
 
         self.assertIsNone(conn._auth_token)
-        self.assertEqual(get_auth_token(conn), "recovered-token")
+        self.assertEqual(conn.get_auth_token(), "recovered-token")
 
     def test_stale_401_does_not_invalidate_newer_token(self):
         conn = make_connection()
         conn._auth_token = "new-token"
         conn._auth_token_valid_until = float("inf")
 
-        invalidate_auth_token(conn, rejected_token="old-token")
+        conn.invalidate_auth_token(rejected_token="old-token")
 
         self.assertEqual(conn._auth_token, "new-token")
+
+    @patch("servicepytan.auth.request_auth_token")
+    def test_module_functions_delegate_to_connection(self, mock_request_auth_token):
+        mock_request_auth_token.return_value = {
+            "access_token": "cached-token",
+            "expires_in": 900,
+        }
+        conn = make_connection()
+
+        self.assertEqual(get_auth_token(conn), "cached-token")
+        invalidate_auth_token(conn, rejected_token="cached-token")
+
+        self.assertIsNone(conn._auth_token)
+
+    @patch("servicepytan.auth.request_auth_token")
+    def test_module_functions_continue_to_accept_legacy_mapping(
+        self, mock_request_auth_token,
+    ):
+        mock_request_auth_token.return_value = {
+            "access_token": "legacy-token",
+            "expires_in": 900,
+        }
+        legacy_conn = {
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+            "auth_root": "https://auth.example.com",
+        }
+
+        self.assertEqual(get_auth_token(legacy_conn), "legacy-token")
 
 
 class TestRequestAuthTokenSecretMasking(unittest.TestCase):

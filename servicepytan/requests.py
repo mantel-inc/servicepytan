@@ -16,7 +16,7 @@ class Endpoint:
   Attributes:
       folder: A string indicating the group of endpoints you want to address.
       endpoint: A string indicating the endpoint you want to address.
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection containing credentials and runtime auth state.
   """
   def __init__(self, folder, endpoint, conn=None):
     """Inits Endpoint with folder, endpoint and allows for getting necessary credentials from the config file."""
