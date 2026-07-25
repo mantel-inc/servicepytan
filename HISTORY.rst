@@ -5,7 +5,7 @@ History
 Unreleased
 ----------
 
-* Cache OAuth access tokens for their advertised lifetime and refresh them safely across threads.
+* Cache OAuth access tokens for their advertised lifetime and share both successful and failed refresh outcomes across concurrent callers.
 * Retry an HTTP 401 once with a fresh token and redact authorization values from request logs.
 * ``servicepytan_connect`` now returns a read-only ``Mapping`` with process-local token state; do not mutate, serialize, copy, or share the connection across processes.
 * A second HTTP 401 after the fresh-token replay is raised immediately instead of entering the generic request retry loop.

@@ -1,7 +1,8 @@
 """Tests for servicepytan.auth module."""
 
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+import threading
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
 
@@ -139,6 +140,63 @@ class TestAuthTokenCaching(unittest.TestCase):
 
         self.assertIsNone(conn._auth_token)
         self.assertEqual(conn.get_auth_token(), "recovered-token")
+
+    def test_concurrent_failed_refresh_is_shared_and_later_call_recovers(self):
+        worker_count = 100
+        waiters_attached = threading.Event()
+        refresh_error = requests.ConnectionError("auth unavailable")
+
+        class TrackingFuture(Future):
+            def __init__(self):
+                super().__init__()
+                self._result_call_count = 0
+                self._result_call_lock = threading.Lock()
+
+            def result(self, timeout=None):
+                with self._result_call_lock:
+                    self._result_call_count += 1
+                    if self._result_call_count == worker_count - 1:
+                        waiters_attached.set()
+                return super().result(timeout=timeout)
+
+        def fail_after_waiters_attach(*args, **kwargs):
+            if not waiters_attached.wait(timeout=10):
+                raise AssertionError("concurrent callers did not share refresh")
+            raise refresh_error
+
+        conn = make_connection()
+        conn._auth_token = "expired-token"
+        conn._auth_token_valid_until = 0
+
+        with patch("servicepytan.auth.Future", TrackingFuture), \
+             patch(
+                 "servicepytan.auth.request_auth_token",
+                 side_effect=fail_after_waiters_attach,
+             ) as mock_request_auth_token, \
+             ThreadPoolExecutor(max_workers=worker_count) as executor:
+            refreshes = [
+                executor.submit(conn.get_auth_token)
+                for _ in range(worker_count)
+            ]
+
+        self.assertTrue(waiters_attached.is_set())
+        self.assertEqual(mock_request_auth_token.call_count, 1)
+        self.assertTrue(all(
+            refresh.exception() is refresh_error
+            for refresh in refreshes
+        ))
+        self.assertIsNone(conn._auth_token_refresh)
+
+        with patch(
+            "servicepytan.auth.request_auth_token",
+            return_value={
+                "access_token": "recovered-token",
+                "expires_in": 900,
+            },
+        ) as mock_recovery:
+            self.assertEqual(conn.get_auth_token(), "recovered-token")
+
+        mock_recovery.assert_called_once()
 
     def test_stale_401_does_not_invalidate_newer_token(self):
         conn = make_connection()

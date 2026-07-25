@@ -6,6 +6,7 @@ import requests
 import json
 import os
 from collections.abc import Mapping
+from concurrent.futures import Future
 from dotenv import load_dotenv
 from enum import StrEnum
 
@@ -87,6 +88,7 @@ class ServiceTitanConnection(Mapping):
     self._auth_token = None
     self._auth_token_valid_until = 0.0
     self._auth_token_lock = threading.Lock()
+    self._auth_token_refresh = None
 
   def __getitem__(self, key):
     return getattr(self, self._KEY_TO_ATTRIBUTE[key])
@@ -123,19 +125,42 @@ class ServiceTitanConnection(Mapping):
 
   def get_auth_token(self):
     """Return a cached OAuth token, refreshing near expiration."""
-    cached_token = self._get_cached_auth_token()
-    if cached_token is not None:
-      return cached_token
-
     with self._auth_token_lock:
-      # Another thread may have refreshed while this caller waited.
       cached_token = self._get_cached_auth_token()
       if cached_token is not None:
         return cached_token
+
+      refresh = self._auth_token_refresh
+      if refresh is None:
+        refresh = Future()
+        self._auth_token_refresh = refresh
+        should_refresh = True
+      else:
+        should_refresh = False
+
+    if not should_refresh:
+      return refresh.result()
+
+    try:
       token_response = request_auth_token(
           self.auth_root, self.client_id, self.client_secret,
       )
-      return self._cache_auth_token(token_response)
+    except BaseException as error:
+      with self._auth_token_lock:
+        refresh.set_exception(error)
+        self._auth_token_refresh = None
+    else:
+      with self._auth_token_lock:
+        try:
+          token = self._cache_auth_token(token_response)
+        except BaseException as error:
+          refresh.set_exception(error)
+        else:
+          refresh.set_result(token)
+        finally:
+          self._auth_token_refresh = None
+
+    return refresh.result()
 
   def invalidate_auth_token(self, rejected_token=None):
     """Invalidate a token without discarding a newer concurrent refresh."""
