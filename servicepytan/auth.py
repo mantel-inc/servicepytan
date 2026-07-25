@@ -50,10 +50,15 @@ AUTH_VARIABLES = [
 ]
 
 TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS = 60
+AUTH_REQUEST_TIMEOUT_SECONDS = 30
 
 
 class ServiceTitanConnection(Mapping):
-  """ServiceTitan configuration and process-local OAuth lifecycle."""
+  """Read-only configuration mapping and process-local OAuth lifecycle.
+
+  Connection instances contain a thread lock and should not be serialized,
+  copied, or shared across processes.
+  """
 
   _KEY_TO_ATTRIBUTE = {
       "SERVICETITAN_APP_KEY": "app_key",
@@ -84,11 +89,7 @@ class ServiceTitanConnection(Mapping):
     self._auth_token_lock = threading.Lock()
 
   def __getitem__(self, key):
-    try:
-      attribute = self._KEY_TO_ATTRIBUTE[key]
-    except KeyError:
-      raise KeyError(key)
-    return getattr(self, attribute)
+    return getattr(self, self._KEY_TO_ATTRIBUTE[key])
 
   def __iter__(self):
     return iter(self._KEY_TO_ATTRIBUTE)
@@ -189,18 +190,38 @@ def servicepytan_connect(
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
                 auth_config[var] = ''
 
-    resolved_environment = (
-        auth_config['SERVICETITAN_API_ENVIRONMENT'] or api_environment
-    )
+    # Preserve the caller's explicit routing choice. Configuration files and
+    # environment variables provide credentials, but must not silently switch
+    # an integration connection to production (or vice versa).
     return ServiceTitanConnection(
-        api_environment=resolved_environment,
+        api_environment=api_environment,
         app_key=auth_config['SERVICETITAN_APP_KEY'],
         tenant_id=auth_config['SERVICETITAN_TENANT_ID'],
         client_id=auth_config['SERVICETITAN_CLIENT_ID'],
         client_secret=auth_config['SERVICETITAN_CLIENT_SECRET'],
         app_id=auth_config['SERVICETITAN_APP_ID'],
-        timezone=auth_config['SERVICETITAN_TIMEZONE'],
+        timezone=auth_config['SERVICETITAN_TIMEZONE'] or "UTC",
     )
+
+
+def _get_oauth_error_details(response):
+  """Return safe OAuth error fields without logging tokens or credentials."""
+  if response is None or response.status_code < 400:
+    return None
+
+  try:
+    response_data = response.json()
+  except (TypeError, ValueError):
+    return None
+
+  if not isinstance(response_data, dict):
+    return None
+
+  return {
+      key: response_data[key]
+      for key in ("error", "error_description")
+      if key in response_data
+  } or None
 
 def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count=3):
   """Fetches Auth Token.
@@ -230,18 +251,25 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
     "client_secret": client_secret,
   }
 
-  response = None
   for i in range(retry_count):
+    response = None
     try:
-      response = requests.post(url, headers=headers, data=data)
+      response = requests.post(
+          url,
+          headers=headers,
+          data=data,
+          timeout=AUTH_REQUEST_TIMEOUT_SECONDS,
+      )
       if response.status_code != requests.codes.ok:
         response.raise_for_status()
 
       return response.json()
     except Exception as e:
       safe_data = {k: ("********" if k == "client_secret" else v) for k, v in data.items()}
-      if response:
-        error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): status_code={response.status_code}, error: {e}"
+      if response is not None:
+        oauth_error = _get_oauth_error_details(response)
+        oauth_error_log = f", oauth_error={oauth_error}" if oauth_error else ""
+        error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): status_code={response.status_code}{oauth_error_log}, error: {e}"
       else:
         error_log = f"Error fetching auth token (url={url}, header={headers}, data={safe_data}, RETRY=({i + 1} / {retry_count})): Failed to get a response. error: {e}"
 

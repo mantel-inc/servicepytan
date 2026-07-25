@@ -76,6 +76,69 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             ["expired-token", "fresh-token"],
         )
 
+    @patch("servicepytan.auth.request_auth_token")
+    @patch("servicepytan.utils.requests.request")
+    def test_oauth_http_error_is_not_rewritten_as_api_401(
+        self, mock_request, mock_request_auth_token,
+    ):
+        conn = ServiceTitanConnection(
+            api_environment="integration",
+            client_id="client-id",
+            client_secret="client-secret",
+            app_key="app-key",
+            tenant_id="tenant-id",
+        )
+        auth_response = make_response(429, {"error": "rate_limited"})
+        auth_error = requests.HTTPError(
+            "429 Too Many Requests", response=auth_response,
+        )
+        mock_request_auth_token.side_effect = [
+            {"access_token": "expired-token", "expires_in": 900},
+            auth_error,
+        ]
+        mock_request.return_value = make_response(
+            401, {"title": "Unauthorized"},
+        )
+
+        with self.assertRaises(requests.HTTPError) as error_ctx:
+            request_json(
+                "https://api.example.com/resource", conn=conn, retry_count=3,
+            )
+
+        self.assertIs(error_ctx.exception, auth_error)
+        self.assertIs(error_ctx.exception.response, auth_response)
+        self.assertEqual(mock_request.call_count, 1)
+
+    @patch("servicepytan.auth.request_auth_token")
+    @patch("servicepytan.utils.requests.request")
+    def test_oauth_network_error_is_not_rewritten_as_api_401(
+        self, mock_request, mock_request_auth_token,
+    ):
+        conn = ServiceTitanConnection(
+            api_environment="integration",
+            client_id="client-id",
+            client_secret="client-secret",
+            app_key="app-key",
+            tenant_id="tenant-id",
+        )
+        auth_error = requests.ConnectionError("auth network unavailable")
+        mock_request_auth_token.side_effect = [
+            {"access_token": "expired-token", "expires_in": 900},
+            auth_error,
+        ]
+        mock_request.return_value = make_response(
+            401, {"title": "Unauthorized"},
+        )
+
+        with self.assertRaises(requests.ConnectionError) as error_ctx:
+            request_json(
+                "https://api.example.com/resource", conn=conn, retry_count=3,
+            )
+
+        self.assertIs(error_ctx.exception, auth_error)
+        self.assertIsNone(error_ctx.exception.response)
+        self.assertEqual(mock_request.call_count, 1)
+
     @patch("servicepytan.utils.invalidate_auth_token")
     @patch("servicepytan.utils.get_auth_headers")
     @patch("servicepytan.utils.requests.request")

@@ -3,9 +3,12 @@
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
+
+import requests
 
 from servicepytan.auth import (
+    AUTH_REQUEST_TIMEOUT_SECONDS,
     ApiEnvironment,
     ServiceTitanConnection,
     get_auth_token,
@@ -42,6 +45,35 @@ class TestAuthTokenCaching(unittest.TestCase):
         self.assertEqual(conn.tenant_id, "tenant-id")
         self.assertEqual(dict(conn)["SERVICETITAN_APP_KEY"], "app-key")
         self.assertNotIn("_auth_token", conn)
+
+    def test_explicit_environment_controls_routing_and_blank_timezone_defaults(self):
+        config = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+            "SERVICETITAN_APP_ID": "app-id",
+            "SERVICETITAN_TIMEZONE": "",
+            "SERVICETITAN_API_ENVIRONMENT": "production",
+        }
+
+        with patch("builtins.open", mock_open(read_data="{}")), \
+             patch("servicepytan.auth.json.load", return_value=config):
+            conn = servicepytan_connect(
+                api_environment=ApiEnvironment.INTEGRATION,
+                config_file="servicepytan_config.json",
+            )
+
+        self.assertEqual(conn.api_environment, ApiEnvironment.INTEGRATION)
+        self.assertEqual(
+            conn.api_root,
+            "https://api-integration.servicetitan.io",
+        )
+        self.assertEqual(
+            conn["SERVICETITAN_API_ENVIRONMENT"],
+            ApiEnvironment.INTEGRATION,
+        )
+        self.assertEqual(conn.timezone, "UTC")
 
     @patch("servicepytan.auth.request_auth_token")
     def test_reuses_token_until_safety_window(self, mock_request_auth_token):
@@ -200,6 +232,46 @@ class TestRequestAuthTokenSecretMasking(unittest.TestCase):
         full_output = "\n".join(log_ctx.output)
         self.assertNotIn("TOKEN_FROM_RESPONSE", full_output)
         self.assertNotIn("SUPERSECRET", full_output)
+
+    def test_http_error_logs_safe_oauth_details_and_uses_timeout(self):
+        mock_response = requests.Response()
+        mock_response.status_code = 400
+        mock_response._content = (
+            b'{"error":"invalid_client","error_description":"bad credentials",'
+            b'"access_token":"TOKEN_FROM_RESPONSE"}'
+        )
+        mock_response.url = "https://example.com/connect/token"
+
+        with patch(
+            "servicepytan.auth.requests.post", return_value=mock_response,
+        ) as mock_post, self.assertLogs(
+            "servicepytan.auth", level="WARNING",
+        ) as log_ctx:
+            with self.assertRaises(requests.HTTPError):
+                request_auth_token(
+                    "https://example.com",
+                    "my_client_id",
+                    "SUPERSECRET",
+                    retry_count=1,
+                )
+
+        full_output = "\n".join(log_ctx.output)
+        self.assertIn("status_code=400", full_output)
+        self.assertIn("invalid_client", full_output)
+        self.assertIn("bad credentials", full_output)
+        self.assertNotIn("Failed to get a response", full_output)
+        self.assertNotIn("TOKEN_FROM_RESPONSE", full_output)
+        self.assertNotIn("SUPERSECRET", full_output)
+        mock_post.assert_called_once_with(
+            "https://example.com/connect/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "my_client_id",
+                "client_secret": "SUPERSECRET",
+            },
+            timeout=AUTH_REQUEST_TIMEOUT_SECONDS,
+        )
 
 
 if __name__ == "__main__":
