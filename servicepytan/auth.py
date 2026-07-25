@@ -125,42 +125,40 @@ class ServiceTitanConnection(Mapping):
 
   def get_auth_token(self):
     """Return a cached OAuth token, refreshing near expiration."""
-    with self._auth_token_lock:
-      cached_token = self._get_cached_auth_token()
-      if cached_token is not None:
-        return cached_token
-
-      refresh = self._auth_token_refresh
-      if refresh is None:
-        refresh = Future()
-        self._auth_token_refresh = refresh
-        should_refresh = True
-      else:
-        should_refresh = False
-
-    if not should_refresh:
-      return refresh.result()
-
+    refresh = None
+    owns_refresh = False
     try:
+      with self._auth_token_lock:
+        cached_token = self._get_cached_auth_token()
+        if cached_token is not None:
+          return cached_token
+
+        refresh = self._auth_token_refresh
+        if refresh is None:
+          refresh = Future()
+          self._auth_token_refresh = refresh
+          owns_refresh = True
+
+      if not owns_refresh:
+        return refresh.result()
+
       token_response = request_auth_token(
           self.auth_root, self.client_id, self.client_secret,
       )
-    except BaseException as error:
       with self._auth_token_lock:
-        refresh.set_exception(error)
-        self._auth_token_refresh = None
-    else:
-      with self._auth_token_lock:
-        try:
-          token = self._cache_auth_token(token_response)
-        except BaseException as error:
-          refresh.set_exception(error)
-        else:
-          refresh.set_result(token)
-        finally:
+        token = self._cache_auth_token(token_response)
+        refresh.set_result(token)
+        if self._auth_token_refresh is refresh:
           self._auth_token_refresh = None
-
-    return refresh.result()
+      return token
+    except BaseException as error:
+      if owns_refresh:
+        with self._auth_token_lock:
+          if not refresh.done():
+            refresh.set_exception(error)
+          if self._auth_token_refresh is refresh:
+            self._auth_token_refresh = None
+      raise
 
   def invalidate_auth_token(self, rejected_token=None):
     """Invalidate a token without discarding a newer concurrent refresh."""
@@ -215,6 +213,16 @@ def servicepytan_connect(
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
                 auth_config[var] = ''
 
+    configured_environment = auth_config['SERVICETITAN_API_ENVIRONMENT']
+    if (configured_environment and
+            configured_environment != api_environment):
+        logger.warning(
+            "Ignoring configured SERVICETITAN_API_ENVIRONMENT=%r; "
+            "the api_environment argument %r controls request routing.",
+            configured_environment,
+            api_environment,
+        )
+
     # Preserve the caller's explicit routing choice. Configuration files and
     # environment variables provide credentials, but must not silently switch
     # an integration connection to production (or vice versa).
@@ -225,7 +233,7 @@ def servicepytan_connect(
         client_id=auth_config['SERVICETITAN_CLIENT_ID'],
         client_secret=auth_config['SERVICETITAN_CLIENT_SECRET'],
         app_id=auth_config['SERVICETITAN_APP_ID'],
-        timezone=auth_config['SERVICETITAN_TIMEZONE'] or "UTC",
+        timezone=auth_config['SERVICETITAN_TIMEZONE'] or timezone or "UTC",
     )
 
 

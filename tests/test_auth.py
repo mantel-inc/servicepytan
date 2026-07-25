@@ -47,7 +47,7 @@ class TestAuthTokenCaching(unittest.TestCase):
         self.assertEqual(dict(conn)["SERVICETITAN_APP_KEY"], "app-key")
         self.assertNotIn("_auth_token", conn)
 
-    def test_explicit_environment_controls_routing_and_blank_timezone_defaults(self):
+    def test_explicit_environment_controls_routing_and_warns_on_conflict(self):
         config = {
             "SERVICETITAN_APP_KEY": "app-key",
             "SERVICETITAN_TENANT_ID": "tenant-id",
@@ -59,7 +59,8 @@ class TestAuthTokenCaching(unittest.TestCase):
         }
 
         with patch("builtins.open", mock_open(read_data="{}")), \
-             patch("servicepytan.auth.json.load", return_value=config):
+             patch("servicepytan.auth.json.load", return_value=config), \
+             self.assertLogs("servicepytan.auth", level="WARNING") as log_ctx:
             conn = servicepytan_connect(
                 api_environment=ApiEnvironment.INTEGRATION,
                 config_file="servicepytan_config.json",
@@ -75,6 +76,52 @@ class TestAuthTokenCaching(unittest.TestCase):
             ApiEnvironment.INTEGRATION,
         )
         self.assertEqual(conn.timezone, "UTC")
+        self.assertIn(
+            "Ignoring configured SERVICETITAN_API_ENVIRONMENT='production'",
+            "\n".join(log_ctx.output),
+        )
+
+    def test_explicit_timezone_survives_missing_config_value(self):
+        config = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+        }
+
+        with patch("builtins.open", mock_open(read_data="{}")), \
+             patch("servicepytan.auth.json.load", return_value=config):
+            conn = servicepytan_connect(
+                api_environment=ApiEnvironment.INTEGRATION,
+                timezone="America/New_York",
+                config_file="servicepytan_config.json",
+            )
+
+        self.assertEqual(conn.timezone, "America/New_York")
+
+    def test_explicit_timezone_survives_missing_environment_value(self):
+        environment = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+            "SERVICETITAN_API_ENVIRONMENT": "production",
+        }
+
+        with patch.dict("os.environ", environment, clear=True), \
+             patch("servicepytan.auth.load_dotenv"), \
+             self.assertLogs("servicepytan.auth", level="WARNING") as log_ctx:
+            conn = servicepytan_connect(
+                api_environment=ApiEnvironment.INTEGRATION,
+                timezone="America/Chicago",
+            )
+
+        self.assertEqual(conn.timezone, "America/Chicago")
+        self.assertEqual(conn.api_environment, ApiEnvironment.INTEGRATION)
+        self.assertIn(
+            "Ignoring configured SERVICETITAN_API_ENVIRONMENT='production'",
+            "\n".join(log_ctx.output),
+        )
 
     @patch("servicepytan.auth.request_auth_token")
     def test_reuses_token_until_safety_window(self, mock_request_auth_token):
@@ -140,6 +187,41 @@ class TestAuthTokenCaching(unittest.TestCase):
 
         self.assertIsNone(conn._auth_token)
         self.assertEqual(conn.get_auth_token(), "recovered-token")
+
+    @patch("servicepytan.auth.request_auth_token")
+    def test_interruption_after_refresh_publication_clears_in_flight_state(
+        self, mock_request_auth_token,
+    ):
+        class InterruptingLock:
+            def __init__(self):
+                self._lock = threading.Lock()
+                self._interrupt_on_exit = True
+
+            def __enter__(self):
+                self._lock.acquire()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self._lock.release()
+                if self._interrupt_on_exit:
+                    self._interrupt_on_exit = False
+                    raise KeyboardInterrupt("refresh owner interrupted")
+
+        mock_request_auth_token.return_value = {
+            "access_token": "recovered-token",
+            "expires_in": 900,
+        }
+        conn = make_connection()
+        conn._auth_token_lock = InterruptingLock()
+
+        with self.assertRaisesRegex(
+            KeyboardInterrupt, "refresh owner interrupted",
+        ):
+            conn.get_auth_token()
+
+        self.assertIsNone(conn._auth_token_refresh)
+        self.assertEqual(conn.get_auth_token(), "recovered-token")
+        mock_request_auth_token.assert_called_once()
 
     def test_concurrent_failed_refresh_is_shared_and_later_call_recovers(self):
         worker_count = 100

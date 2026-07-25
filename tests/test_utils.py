@@ -186,7 +186,9 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             make_response(401, {"title": "Unauthorized"}),
         ]
 
-        with self.assertRaises(requests.HTTPError):
+        with self.assertLogs(
+            "servicepytan.utils", level="WARNING",
+        ) as log_ctx, self.assertRaises(requests.HTTPError):
             request_json(
                 "https://api.example.com/resource", conn=conn, retry_count=3,
             )
@@ -200,6 +202,11 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             ],
         )
         mock_sleep.assert_not_called()
+        full_output = "\n".join(log_ctx.output)
+        self.assertIn("remained unauthorized", full_output)
+        self.assertIn("status_code=401", full_output)
+        self.assertNotIn("expired-token", full_output)
+        self.assertNotIn("rejected-token", full_output)
 
     @patch("servicepytan.utils.get_auth_headers")
     @patch("servicepytan.utils.requests.request")

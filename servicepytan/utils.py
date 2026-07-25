@@ -63,6 +63,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
           headers = get_auth_headers(conn)
           continue
         # Authentication recovery is deliberately limited to one replay.
+        logger.warning(
+          f"ServiceTitan request remained unauthorized after one token "
+          f"refresh (url={url}, request_type={request_type}, "
+          f"status_code={response.status_code})."
+        )
         response.raise_for_status()
 
       try:
