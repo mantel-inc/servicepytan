@@ -54,15 +54,16 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       # it, so refreshing the token and replaying once is safe for every method,
       # including non-idempotent POST/PUT calls.
       if response.status_code == requests.codes.unauthorized:
-        rejected_token = headers.get('Authorization')
-        invalidate_auth_token(conn, rejected_token=rejected_token)
         if not auth_retry_attempted:
+          rejected_token = headers.get('Authorization')
+          invalidate_auth_token(conn, rejected_token=rejected_token)
           auth_retry_attempted = True
           # OAuth refresh failures must propagate with their own response and
           # must not be rewritten as the stale API 401 response.
           headers = get_auth_headers(conn)
           continue
-        # Authentication recovery is deliberately limited to one replay.
+        # A fresh token was already tried. Retain it because this 401 may come
+        # from the app key, tenant, or scopes rather than token expiration.
         logger.warning(
           f"ServiceTitan request remained unauthorized after one token "
           f"refresh (url={url}, request_type={request_type}, "

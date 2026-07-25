@@ -136,8 +136,8 @@ class ServiceTitanConnection(Mapping):
         refresh = self._auth_token_refresh
         if refresh is None:
           refresh = Future()
-          self._auth_token_refresh = refresh
           owns_refresh = True
+          self._auth_token_refresh = refresh
 
       if not owns_refresh:
         return refresh.result()
@@ -175,9 +175,13 @@ class ServiceTitanConnection(Mapping):
     }
 
 def servicepytan_connect(
-    api_environment: str=ApiEnvironment.PRODUCTION,
+    api_environment: str=None,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
-    client_secret:str=None, app_id:str=None, timezone:str="UTC", config_file:str=None):
+    client_secret:str=None, app_id:str=None, timezone:str=None, config_file:str=None):
+    requested_environment = api_environment
+    requested_timezone = timezone
+    configured_environment = None
+    configured_timezone = None
     
     auth_config = {
         "SERVICETITAN_APP_KEY": app_key,
@@ -197,12 +201,14 @@ def servicepytan_connect(
         logger.info("Setting auth config from file...")
         with open(config_file) as config:
             creds = json.load(config)
+        configured_environment = creds.get('SERVICETITAN_API_ENVIRONMENT')
+        configured_timezone = creds.get('SERVICETITAN_TIMEZONE')
         for var in AUTH_VARIABLES:
             auth_config[var] = creds.get(var, '')
 
     # If not, check if the environment variables are set
     # AFAICT, app_id is never used in the rest of the code, so it isn't necessary
-    elif not api_environment or not app_key or not tenant_id or not client_id or not client_secret:
+    elif not app_key or not tenant_id or not client_id or not client_secret:
         load_dotenv()
         logger.info("Auth config not provided, loading from environment variables...")
         for var in AUTH_VARIABLES:
@@ -212,28 +218,48 @@ def servicepytan_connect(
             else:
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
                 auth_config[var] = ''
+        configured_environment = auth_config['SERVICETITAN_API_ENVIRONMENT']
+        configured_timezone = auth_config['SERVICETITAN_TIMEZONE']
+    elif api_environment is None or timezone is None:
+        load_dotenv()
+        configured_environment = os.environ.get(
+            'SERVICETITAN_API_ENVIRONMENT',
+        )
+        configured_timezone = os.environ.get('SERVICETITAN_TIMEZONE')
 
-    configured_environment = auth_config['SERVICETITAN_API_ENVIRONMENT']
-    if (configured_environment and
-            configured_environment != api_environment):
+    if (requested_environment and configured_environment and
+            configured_environment != requested_environment):
         logger.warning(
             "Ignoring configured SERVICETITAN_API_ENVIRONMENT=%r; "
             "the api_environment argument %r controls request routing.",
             configured_environment,
-            api_environment,
+            requested_environment,
+        )
+    if (requested_timezone and configured_timezone and
+            configured_timezone != requested_timezone):
+        logger.warning(
+            "Ignoring configured SERVICETITAN_TIMEZONE=%r; "
+            "the timezone argument %r controls date handling.",
+            configured_timezone,
+            requested_timezone,
         )
 
-    # Preserve the caller's explicit routing choice. Configuration files and
-    # environment variables provide credentials, but must not silently switch
-    # an integration connection to production (or vice versa).
+    resolved_environment = (
+        requested_environment or configured_environment or
+        ApiEnvironment.PRODUCTION
+    )
+    resolved_timezone = requested_timezone or configured_timezone or "UTC"
+
+    # Explicit routing values win; configuration fills omitted values before
+    # the production and UTC defaults are applied.
     return ServiceTitanConnection(
-        api_environment=api_environment,
+        api_environment=resolved_environment,
         app_key=auth_config['SERVICETITAN_APP_KEY'],
         tenant_id=auth_config['SERVICETITAN_TENANT_ID'],
         client_id=auth_config['SERVICETITAN_CLIENT_ID'],
         client_secret=auth_config['SERVICETITAN_CLIENT_SECRET'],
         app_id=auth_config['SERVICETITAN_APP_ID'],
-        timezone=auth_config['SERVICETITAN_TIMEZONE'] or timezone or "UTC",
+        timezone=resolved_timezone,
     )
 
 

@@ -198,7 +198,6 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             mock_invalidate_auth_token.call_args_list,
             [
                 call(conn, rejected_token="expired-token"),
-                call(conn, rejected_token="rejected-token"),
             ],
         )
         mock_sleep.assert_not_called()
@@ -207,6 +206,47 @@ class TestRequestJsonAuthentication(unittest.TestCase):
         self.assertIn("status_code=401", full_output)
         self.assertNotIn("expired-token", full_output)
         self.assertNotIn("rejected-token", full_output)
+
+    @patch("servicepytan.auth.request_auth_token")
+    @patch("servicepytan.utils.requests.request")
+    def test_second_401_retains_fresh_token_for_later_requests(
+        self, mock_request, mock_request_auth_token,
+    ):
+        conn = ServiceTitanConnection(
+            api_environment="integration",
+            client_id="client-id",
+            client_secret="client-secret",
+            app_key="app-key",
+            tenant_id="tenant-id",
+        )
+        mock_request_auth_token.side_effect = [
+            {"access_token": "expired-token", "expires_in": 900},
+            {"access_token": "fresh-token", "expires_in": 900},
+        ]
+        mock_request.side_effect = [
+            make_response(401, {"title": "Unauthorized"}),
+            make_response(401, {"title": "Unauthorized"}),
+            make_response(200, {"ok": True}),
+        ]
+
+        with self.assertLogs("servicepytan.utils", level="WARNING"):
+            with self.assertRaises(requests.HTTPError):
+                request_json(
+                    "https://api.example.com/resource",
+                    conn=conn,
+                    retry_count=3,
+                )
+
+        self.assertEqual(
+            request_json("https://api.example.com/resource", conn=conn),
+            {"ok": True},
+        )
+        self.assertEqual(mock_request_auth_token.call_count, 2)
+        self.assertEqual(
+            [request_call.kwargs["headers"]["Authorization"]
+             for request_call in mock_request.call_args_list],
+            ["expired-token", "fresh-token", "fresh-token"],
+        )
 
     @patch("servicepytan.utils.get_auth_headers")
     @patch("servicepytan.utils.requests.request")
