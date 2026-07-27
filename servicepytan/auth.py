@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import Mapping
 from concurrent.futures import Future
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from enum import StrEnum
 
 import logging
@@ -39,16 +39,20 @@ def get_api_root_url(env: str) -> str:
             raise ValueError(f"Unknown ApiEnvironment: {env}")
 
 
-AUTH_VARIABLES = [
+CREDENTIAL_VARIABLES = [
     'SERVICETITAN_APP_KEY',
     'SERVICETITAN_TENANT_ID',
     'SERVICETITAN_CLIENT_ID',
     'SERVICETITAN_CLIENT_SECRET',
     'SERVICETITAN_APP_ID',
-    'SERVICETITAN_TIMEZONE',
-
-    'SERVICETITAN_API_ENVIRONMENT'  # One of values of the ApiEnvironment enum
 ]
+
+ROUTING_VARIABLES = [
+    'SERVICETITAN_TIMEZONE',
+    'SERVICETITAN_API_ENVIRONMENT',
+]
+
+AUTH_VARIABLES = CREDENTIAL_VARIABLES + ROUTING_VARIABLES
 
 TOKEN_EXPIRY_SAFETY_MARGIN_SECONDS = 60
 AUTH_REQUEST_TIMEOUT_SECONDS = 30
@@ -175,13 +179,11 @@ class ServiceTitanConnection(Mapping):
     }
 
 
-def _read_configured_routing(source):
+def _read_configured_routing(source, fallback=None):
+    fallback = fallback or {}
     return {
-        key: source.get(key)
-        for key in (
-            'SERVICETITAN_API_ENVIRONMENT',
-            'SERVICETITAN_TIMEZONE',
-        )
+        key: source.get(key, fallback.get(key))
+        for key in ROUTING_VARIABLES
     }
 
 
@@ -242,10 +244,6 @@ def servicepytan_connect(
         "SERVICETITAN_CLIENT_ID": client_id,
         "SERVICETITAN_CLIENT_SECRET": client_secret,
         "SERVICETITAN_APP_ID": app_id,
-        "SERVICETITAN_TIMEZONE": timezone,
-
-        'SERVICETITAN_API_ENVIRONMENT': api_environment,
-
     }
 
 
@@ -256,7 +254,7 @@ def servicepytan_connect(
             creds = json.load(config)
         configured_routing = _read_configured_routing(creds)
         configured_source = f"config file {config_file!r}"
-        for var in AUTH_VARIABLES:
+        for var in CREDENTIAL_VARIABLES:
             auth_config[var] = creds.get(var, '')
 
     # If not, check if the environment variables are set
@@ -264,7 +262,7 @@ def servicepytan_connect(
     elif not app_key or not tenant_id or not client_id or not client_secret:
         load_dotenv()
         logger.info("Auth config not provided, loading from environment variables...")
-        for var in AUTH_VARIABLES:
+        for var in CREDENTIAL_VARIABLES:
             auth_var = os.environ.get(var)
             if auth_var:
                 auth_config[var] = auth_var
@@ -274,13 +272,21 @@ def servicepytan_connect(
         configured_routing = _read_configured_routing(os.environ)
         configured_source = "environment"
     elif api_environment is None or timezone is None:
-        load_dotenv()
-        configured_routing = _read_configured_routing(os.environ)
-        configured_source = "environment"
+        configured_routing = _read_configured_routing(
+            os.environ,
+            fallback=dotenv_values(),
+        )
+        configured_source = "environment or .env"
 
-    configured_environment = _normalize_api_environment(
-        configured_routing.get('SERVICETITAN_API_ENVIRONMENT'),
+    raw_configured_environment = configured_routing.get(
+        'SERVICETITAN_API_ENVIRONMENT',
     )
+    configured_environment = _normalize_api_environment(
+        raw_configured_environment,
+    )
+    if (requested_environment is None and raw_configured_environment and
+            not configured_environment):
+        _validate_api_environment(configured_environment, configured_source)
     resolved_environment, environment_source = _resolve_configured_value(
         'SERVICETITAN_API_ENVIRONMENT',
         requested_environment,

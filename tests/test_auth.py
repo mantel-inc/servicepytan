@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
+import os
 import threading
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
@@ -182,6 +183,62 @@ class TestAuthTokenCaching(unittest.TestCase):
             "\n".join(log_ctx.output),
         )
 
+    def test_routing_only_dotenv_fallback_does_not_mutate_environment(self):
+        environment = {
+            "SERVICETITAN_API_ENVIRONMENT": "integration",
+            "SERVICETITAN_TIMEZONE": "America/Phoenix",
+            "UNRELATED_SETTING": "process-value",
+        }
+        dotenv_config = {
+            "SERVICETITAN_API_ENVIRONMENT": "production",
+            "SERVICETITAN_TIMEZONE": "America/Denver",
+            "UNRELATED_SETTING": "file-value",
+        }
+
+        with patch.dict("os.environ", environment, clear=True), \
+             patch(
+                 "servicepytan.auth.dotenv_values",
+                 return_value=dotenv_config,
+             ) as mock_dotenv_values, \
+             patch("servicepytan.auth.load_dotenv") as mock_load_dotenv:
+            original_environment = dict(os.environ)
+            conn = servicepytan_connect(
+                api_environment=ApiEnvironment.INTEGRATION,
+                app_key="app-key",
+                tenant_id="tenant-id",
+                client_id="client-id",
+                client_secret="client-secret",
+            )
+
+            self.assertEqual(dict(os.environ), original_environment)
+
+        self.assertEqual(conn.api_environment, ApiEnvironment.INTEGRATION)
+        self.assertEqual(conn.timezone, "America/Phoenix")
+        mock_dotenv_values.assert_called_once_with()
+        mock_load_dotenv.assert_not_called()
+
+    def test_config_file_is_the_only_configured_routing_source(self):
+        config = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+        }
+        environment = {
+            "SERVICETITAN_API_ENVIRONMENT": "integration",
+            "SERVICETITAN_TIMEZONE": "America/Phoenix",
+        }
+
+        with patch.dict("os.environ", environment, clear=True), \
+             patch("builtins.open", mock_open(read_data="{}")), \
+             patch("servicepytan.auth.json.load", return_value=config):
+            conn = servicepytan_connect(
+                config_file="servicepytan_config.json",
+            )
+
+        self.assertEqual(conn.api_environment, ApiEnvironment.PRODUCTION)
+        self.assertEqual(conn.timezone, "UTC")
+
     def test_invalid_config_environment_has_actionable_error(self):
         config = {
             "SERVICETITAN_APP_KEY": "app-key",
@@ -196,6 +253,24 @@ class TestAuthTokenCaching(unittest.TestCase):
              self.assertRaisesRegex(
                  ValueError,
                  "SERVICETITAN_API_ENVIRONMENT value 'sandbox' from "
+                 "config file 'servicepytan_config.json'",
+            ):
+            servicepytan_connect(config_file="servicepytan_config.json")
+
+    def test_whitespace_only_config_environment_is_rejected(self):
+        config = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+            "SERVICETITAN_API_ENVIRONMENT": "   ",
+        }
+
+        with patch("builtins.open", mock_open(read_data="{}")), \
+             patch("servicepytan.auth.json.load", return_value=config), \
+             self.assertRaisesRegex(
+                 ValueError,
+                 "SERVICETITAN_API_ENVIRONMENT value '' from "
                  "config file 'servicepytan_config.json'",
              ):
             servicepytan_connect(config_file="servicepytan_config.json")

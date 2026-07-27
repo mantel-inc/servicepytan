@@ -55,6 +55,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       # including non-idempotent POST/PUT calls.
       if response.status_code == requests.codes.unauthorized:
         if not auth_retry_attempted:
+          logger.warning(
+            f"ServiceTitan request was unauthorized; refreshing the token "
+            f"and replaying once (url={url}, request_type={request_type}, "
+            f"status_code={response.status_code})."
+          )
           rejected_token = headers.get('Authorization')
           invalidate_auth_token(conn, rejected_token=rejected_token)
           auth_retry_attempted = True
@@ -64,10 +69,15 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
           continue
         # A fresh token was already tried. Retain it because this 401 may come
         # from the app key, tenant, or scopes rather than token expiration.
+        if verbose:
+          response_detail = f"content={response.content}"
+        else:
+          content_length = len(response.content) if response.content else 0
+          response_detail = f"content_length={content_length} bytes"
         logger.warning(
           f"ServiceTitan request remained unauthorized after one token "
           f"refresh (url={url}, request_type={request_type}, "
-          f"status_code={response.status_code}, content={response.content})."
+          f"status_code={response.status_code}, {response_detail})."
         )
         response.raise_for_status()
 

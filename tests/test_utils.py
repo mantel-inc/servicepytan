@@ -64,9 +64,12 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             make_response(200, {"ok": True}),
         ]
 
-        result = request_json(
-            "https://api.example.com/resource", conn=conn, retry_count=1,
-        )
+        with self.assertLogs(
+            "servicepytan.utils", level="WARNING",
+        ) as log_ctx:
+            result = request_json(
+                "https://api.example.com/resource", conn=conn, retry_count=1,
+            )
 
         self.assertEqual(result, {"ok": True})
         self.assertEqual(mock_request_auth_token.call_count, 2)
@@ -74,6 +77,10 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             [request_call.kwargs["headers"]["Authorization"]
              for request_call in mock_request.call_args_list],
             ["expired-token", "fresh-token"],
+        )
+        self.assertIn(
+            "refreshing the token and replaying once",
+            "\n".join(log_ctx.output),
         )
 
     @patch("servicepytan.auth.request_auth_token")
@@ -202,11 +209,50 @@ class TestRequestJsonAuthentication(unittest.TestCase):
         )
         mock_sleep.assert_not_called()
         full_output = "\n".join(log_ctx.output)
+        self.assertIn("refreshing the token and replaying once", full_output)
         self.assertIn("remained unauthorized", full_output)
         self.assertIn("status_code=401", full_output)
         self.assertIn("Unauthorized", full_output)
         self.assertNotIn("expired-token", full_output)
         self.assertNotIn("rejected-token", full_output)
+
+    @patch("servicepytan.utils.invalidate_auth_token")
+    @patch("servicepytan.utils.get_auth_headers")
+    @patch("servicepytan.utils.requests.request")
+    def test_second_401_omits_response_body_when_not_verbose(
+        self, mock_request, mock_get_auth_headers, mock_invalidate_auth_token,
+    ):
+        mock_get_auth_headers.side_effect = [
+            {"Authorization": "expired-token", "ST-App-Key": "app-key"},
+            {"Authorization": "fresh-token", "ST-App-Key": "app-key"},
+        ]
+        first_response = make_response(
+            401, {"title": "first-sensitive-body"},
+        )
+        terminal_response = make_response(
+            401, {"title": "terminal-sensitive-body"},
+        )
+        mock_request.side_effect = [first_response, terminal_response]
+
+        with self.assertLogs(
+            "servicepytan.utils", level="WARNING",
+        ) as log_ctx, self.assertRaises(requests.HTTPError):
+            request_json(
+                "https://api.example.com/resource",
+                conn=object(),
+                retry_count=3,
+                verbose=False,
+            )
+
+        full_output = "\n".join(log_ctx.output)
+        self.assertIn(
+            f"content_length={len(terminal_response.content)} bytes",
+            full_output,
+        )
+        self.assertNotIn("first-sensitive-body", full_output)
+        self.assertNotIn("terminal-sensitive-body", full_output)
+        self.assertNotIn("expired-token", full_output)
+        self.assertNotIn("fresh-token", full_output)
 
     @patch("servicepytan.auth.request_auth_token")
     @patch("servicepytan.utils.requests.request")
