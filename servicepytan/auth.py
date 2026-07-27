@@ -174,14 +174,67 @@ class ServiceTitanConnection(Mapping):
         "ST-App-Key": self.app_key,
     }
 
+
+def _read_configured_routing(source):
+    return {
+        key: source.get(key)
+        for key in (
+            'SERVICETITAN_API_ENVIRONMENT',
+            'SERVICETITAN_TIMEZONE',
+        )
+    }
+
+
+def _resolve_configured_value(
+    name, requested, configured, default, configured_source,
+):
+    if requested is not None:
+        if configured and configured != requested:
+            logger.warning(
+                "Ignoring configured %s=%r; the explicit argument %r wins.",
+                name,
+                configured,
+                requested,
+            )
+        return requested, "explicit argument"
+
+    if configured:
+        logger.info(
+            "Using configured %s=%r from %s.",
+            name,
+            configured,
+            configured_source,
+        )
+        return configured, configured_source
+
+    return default, "default"
+
+
+def _normalize_api_environment(value):
+    if isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
+def _validate_api_environment(value, source):
+    try:
+        return ApiEnvironment(value)
+    except (TypeError, ValueError):
+        expected = ", ".join(environment.value for environment in ApiEnvironment)
+        raise ValueError(
+            "Invalid SERVICETITAN_API_ENVIRONMENT value "
+            f"{value!r} from {source}; expected one of: {expected}."
+        ) from None
+
+
 def servicepytan_connect(
     api_environment: str=None,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str=None, config_file:str=None):
-    requested_environment = api_environment
+    requested_environment = _normalize_api_environment(api_environment)
     requested_timezone = timezone
-    configured_environment = None
-    configured_timezone = None
+    configured_routing = {}
+    configured_source = "configuration"
     
     auth_config = {
         "SERVICETITAN_APP_KEY": app_key,
@@ -201,8 +254,8 @@ def servicepytan_connect(
         logger.info("Setting auth config from file...")
         with open(config_file) as config:
             creds = json.load(config)
-        configured_environment = creds.get('SERVICETITAN_API_ENVIRONMENT')
-        configured_timezone = creds.get('SERVICETITAN_TIMEZONE')
+        configured_routing = _read_configured_routing(creds)
+        configured_source = f"config file {config_file!r}"
         for var in AUTH_VARIABLES:
             auth_config[var] = creds.get(var, '')
 
@@ -218,37 +271,34 @@ def servicepytan_connect(
             else:
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
                 auth_config[var] = ''
-        configured_environment = auth_config['SERVICETITAN_API_ENVIRONMENT']
-        configured_timezone = auth_config['SERVICETITAN_TIMEZONE']
+        configured_routing = _read_configured_routing(os.environ)
+        configured_source = "environment"
     elif api_environment is None or timezone is None:
         load_dotenv()
-        configured_environment = os.environ.get(
-            'SERVICETITAN_API_ENVIRONMENT',
-        )
-        configured_timezone = os.environ.get('SERVICETITAN_TIMEZONE')
+        configured_routing = _read_configured_routing(os.environ)
+        configured_source = "environment"
 
-    if (requested_environment and configured_environment and
-            configured_environment != requested_environment):
-        logger.warning(
-            "Ignoring configured SERVICETITAN_API_ENVIRONMENT=%r; "
-            "the api_environment argument %r controls request routing.",
-            configured_environment,
-            requested_environment,
-        )
-    if (requested_timezone and configured_timezone and
-            configured_timezone != requested_timezone):
-        logger.warning(
-            "Ignoring configured SERVICETITAN_TIMEZONE=%r; "
-            "the timezone argument %r controls date handling.",
-            configured_timezone,
-            requested_timezone,
-        )
-
-    resolved_environment = (
-        requested_environment or configured_environment or
-        ApiEnvironment.PRODUCTION
+    configured_environment = _normalize_api_environment(
+        configured_routing.get('SERVICETITAN_API_ENVIRONMENT'),
     )
-    resolved_timezone = requested_timezone or configured_timezone or "UTC"
+    resolved_environment, environment_source = _resolve_configured_value(
+        'SERVICETITAN_API_ENVIRONMENT',
+        requested_environment,
+        configured_environment,
+        ApiEnvironment.PRODUCTION,
+        configured_source,
+    )
+    resolved_environment = _validate_api_environment(
+        resolved_environment,
+        environment_source,
+    )
+    resolved_timezone, _ = _resolve_configured_value(
+        'SERVICETITAN_TIMEZONE',
+        requested_timezone,
+        configured_routing.get('SERVICETITAN_TIMEZONE'),
+        "UTC",
+        configured_source,
+    )
 
     # Explicit routing values win; configuration fills omitted values before
     # the production and UTC defaults are applied.

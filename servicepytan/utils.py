@@ -67,7 +67,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         logger.warning(
           f"ServiceTitan request remained unauthorized after one token "
           f"refresh (url={url}, request_type={request_type}, "
-          f"status_code={response.status_code})."
+          f"status_code={response.status_code}, content={response.content})."
         )
         response.raise_for_status()
 

@@ -11,6 +11,8 @@ Unreleased
 * A second HTTP 401 after the fresh-token replay is raised immediately instead of entering the generic request retry loop.
 * ``get_auth_token`` may return a cached token until its safety window begins (up to 60 seconds before its advertised expiration).
 * Explicit environment and timezone arguments take precedence over config-file or environment values; omitted arguments use configured values before production and UTC defaults.
+* Configured ``SERVICETITAN_API_ENVIRONMENT`` values now control routing when the explicit argument is omitted. Existing config files and environment variables should be checked during upgrade; values are normalized for case and surrounding whitespace, then validated before use.
+* Authentication credentials are not merged across sources: config-file values replace explicit credential arguments, while omitting any required argument without a config file loads every credential from the environment.
 
 0.1.0 (2022-03-27)
 ------------------

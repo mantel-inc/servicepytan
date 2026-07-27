@@ -140,18 +140,24 @@ class TestAuthTokenCaching(unittest.TestCase):
             "SERVICETITAN_TENANT_ID": "tenant-id",
             "SERVICETITAN_CLIENT_ID": "client-id",
             "SERVICETITAN_CLIENT_SECRET": "client-secret",
-            "SERVICETITAN_API_ENVIRONMENT": "integration",
+            "SERVICETITAN_API_ENVIRONMENT": " INTEGRATION ",
             "SERVICETITAN_TIMEZONE": "America/Denver",
         }
 
         with patch("builtins.open", mock_open(read_data="{}")), \
-             patch("servicepytan.auth.json.load", return_value=config):
+             patch("servicepytan.auth.json.load", return_value=config), \
+             self.assertLogs("servicepytan.auth", level="INFO") as log_ctx:
             conn = servicepytan_connect(
                 config_file="servicepytan_config.json",
             )
 
         self.assertEqual(conn.api_environment, ApiEnvironment.INTEGRATION)
         self.assertEqual(conn.timezone, "America/Denver")
+        self.assertIn(
+            "Using configured SERVICETITAN_API_ENVIRONMENT='integration' "
+            "from config file 'servicepytan_config.json'",
+            "\n".join(log_ctx.output),
+        )
 
     def test_environment_routing_values_apply_when_arguments_are_omitted(self):
         environment = {
@@ -159,16 +165,40 @@ class TestAuthTokenCaching(unittest.TestCase):
             "SERVICETITAN_TENANT_ID": "tenant-id",
             "SERVICETITAN_CLIENT_ID": "client-id",
             "SERVICETITAN_CLIENT_SECRET": "client-secret",
-            "SERVICETITAN_API_ENVIRONMENT": "integration",
+            "SERVICETITAN_API_ENVIRONMENT": " Integration ",
             "SERVICETITAN_TIMEZONE": "America/Phoenix",
         }
 
         with patch.dict("os.environ", environment, clear=True), \
-             patch("servicepytan.auth.load_dotenv"):
+             patch("servicepytan.auth.load_dotenv"), \
+             self.assertLogs("servicepytan.auth", level="INFO") as log_ctx:
             conn = servicepytan_connect()
 
         self.assertEqual(conn.api_environment, ApiEnvironment.INTEGRATION)
         self.assertEqual(conn.timezone, "America/Phoenix")
+        self.assertIn(
+            "Using configured SERVICETITAN_API_ENVIRONMENT='integration' "
+            "from environment",
+            "\n".join(log_ctx.output),
+        )
+
+    def test_invalid_config_environment_has_actionable_error(self):
+        config = {
+            "SERVICETITAN_APP_KEY": "app-key",
+            "SERVICETITAN_TENANT_ID": "tenant-id",
+            "SERVICETITAN_CLIENT_ID": "client-id",
+            "SERVICETITAN_CLIENT_SECRET": "client-secret",
+            "SERVICETITAN_API_ENVIRONMENT": " sandbox ",
+        }
+
+        with patch("builtins.open", mock_open(read_data="{}")), \
+             patch("servicepytan.auth.json.load", return_value=config), \
+             self.assertRaisesRegex(
+                 ValueError,
+                 "SERVICETITAN_API_ENVIRONMENT value 'sandbox' from "
+                 "config file 'servicepytan_config.json'",
+             ):
+            servicepytan_connect(config_file="servicepytan_config.json")
 
     @patch("servicepytan.auth.request_auth_token")
     def test_reuses_token_until_safety_window(self, mock_request_auth_token):
