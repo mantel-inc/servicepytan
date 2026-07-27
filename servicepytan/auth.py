@@ -212,12 +212,6 @@ def _resolve_configured_value(
     return default, "default"
 
 
-def _normalize_api_environment(value):
-    if isinstance(value, str):
-        return value.strip().lower()
-    return value
-
-
 def _validate_api_environment(value, source):
     try:
         return ApiEnvironment(value)
@@ -229,11 +223,22 @@ def _validate_api_environment(value, source):
         ) from None
 
 
+def _normalize_api_environment(value, source):
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if not value:
+            _validate_api_environment(value, source)
+    return value
+
+
 def servicepytan_connect(
     api_environment: str=None,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str=None, config_file:str=None):
-    requested_environment = _normalize_api_environment(api_environment)
+    requested_environment = _normalize_api_environment(
+        api_environment,
+        "explicit argument",
+    )
     requested_timezone = timezone
     configured_routing = {}
     configured_source = "configuration"
@@ -270,7 +275,7 @@ def servicepytan_connect(
                 logger.info(f"Environment variable {var} not found or provided in function. Defaulting to empty string.")
                 auth_config[var] = ''
         configured_routing = _read_configured_routing(os.environ)
-        configured_source = "environment"
+        configured_source = "environment or .env"
     elif api_environment is None or timezone is None:
         configured_routing = _read_configured_routing(
             os.environ,
@@ -283,10 +288,8 @@ def servicepytan_connect(
     )
     configured_environment = _normalize_api_environment(
         raw_configured_environment,
+        configured_source,
     )
-    if (requested_environment is None and raw_configured_environment and
-            not configured_environment):
-        _validate_api_environment(configured_environment, configured_source)
     resolved_environment, environment_source = _resolve_configured_value(
         'SERVICETITAN_API_ENVIRONMENT',
         requested_environment,

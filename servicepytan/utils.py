@@ -12,6 +12,18 @@ import logging
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 
+
+def _response_detail(response, verbose, include_text=False):
+  if not verbose:
+    content_length = len(response.content) if response.content else 0
+    return f"content_length={content_length} bytes"
+
+  detail = f"content={response.content}"
+  if include_text:
+    detail = f"{detail}, text={response.text}"
+  return detail
+
+
 def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3, verbose=True):
   """Makes the request to the API and returns JSON
 
@@ -44,11 +56,13 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     except Exception as error:
       request_error = error
     else:
+      response_detail = _response_detail(
+        response, verbose, include_text=True,
+      )
       if verbose:
-        logger.info(f"Response: request_url={url}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, content={response.content}, text={response.text}")
+        logger.info(f"Response: request_url={url}, payload={payload}, json_payload={json_payload} =>  status_code={response.status_code}, {response_detail}")
       else:
-        content_length = len(response.content) if response.content else 0
-        logger.info(f"Response: request_url={url} => status_code={response.status_code}, content_length={content_length} bytes")
+        logger.info(f"Response: request_url={url} => status_code={response.status_code}, {response_detail}")
 
       # A 401 response means ServiceTitan rejected the request before applying
       # it, so refreshing the token and replaying once is safe for every method,
@@ -69,11 +83,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
           continue
         # A fresh token was already tried. Retain it because this 401 may come
         # from the app key, tenant, or scopes rather than token expiration.
-        if verbose:
-          response_detail = f"content={response.content}"
-        else:
-          content_length = len(response.content) if response.content else 0
-          response_detail = f"content_length={content_length} bytes"
+        response_detail = _response_detail(response, verbose)
         logger.warning(
           f"ServiceTitan request remained unauthorized after one token "
           f"refresh (url={url}, request_type={request_type}, "
@@ -97,10 +107,13 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     if response is None:
       error_log = f"Error fetching data (url={url}, payload={payload}, RETRY=({attempt} / {retry_count})): Failed to get a response. error: {request_error}"
     elif verbose:
-      error_log = f"Error fetching data (url={url}, payload={payload}, RETRY=({attempt} / {retry_count})): content: {response.content}, text: {response.text}, error: {request_error}"
+      response_detail = _response_detail(
+        response, verbose, include_text=True,
+      )
+      error_log = f"Error fetching data (url={url}, payload={payload}, RETRY=({attempt} / {retry_count})): {response_detail}, error: {request_error}"
     else:
-      content_length = len(response.content) if response.content else 0
-      error_log = f"Error fetching data (url={url}, RETRY=({attempt} / {retry_count})): content_length: {content_length} bytes, error: {request_error}"
+      response_detail = _response_detail(response, verbose)
+      error_log = f"Error fetching data (url={url}, RETRY=({attempt} / {retry_count})): {response_detail}, error: {request_error}"
 
     logger.warning(error_log)
     if attempt < retry_count:

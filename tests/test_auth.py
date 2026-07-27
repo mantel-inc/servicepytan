@@ -179,7 +179,7 @@ class TestAuthTokenCaching(unittest.TestCase):
         self.assertEqual(conn.timezone, "America/Phoenix")
         self.assertIn(
             "Using configured SERVICETITAN_API_ENVIRONMENT='integration' "
-            "from environment",
+            "from environment or .env",
             "\n".join(log_ctx.output),
         )
 
@@ -274,6 +274,32 @@ class TestAuthTokenCaching(unittest.TestCase):
                  "config file 'servicepytan_config.json'",
              ):
             servicepytan_connect(config_file="servicepytan_config.json")
+
+    def test_empty_environment_value_masks_dotenv_and_is_rejected(self):
+        environment = {
+            "SERVICETITAN_API_ENVIRONMENT": "",
+        }
+        dotenv_config = {
+            "SERVICETITAN_API_ENVIRONMENT": "integration",
+        }
+
+        with patch.dict("os.environ", environment, clear=True), \
+             patch(
+                 "servicepytan.auth.dotenv_values",
+                 return_value=dotenv_config,
+             ), \
+             self.assertRaisesRegex(
+                 ValueError,
+                 "SERVICETITAN_API_ENVIRONMENT value '' from "
+                 "environment or .env",
+             ):
+            servicepytan_connect(
+                app_key="app-key",
+                tenant_id="tenant-id",
+                client_id="client-id",
+                client_secret="client-secret",
+                timezone="UTC",
+            )
 
     @patch("servicepytan.auth.request_auth_token")
     def test_reuses_token_until_safety_window(self, mock_request_auth_token):
