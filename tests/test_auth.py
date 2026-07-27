@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch, MagicMock, mock_open
 
 import requests
+import servicepytan.auth as auth_module
 
 from servicepytan.auth import (
     AUTH_REQUEST_TIMEOUT_SECONDS,
@@ -28,6 +29,72 @@ def make_connection():
         app_key="app-key",
         tenant_id="tenant-id",
     )
+
+
+class TestApiEnvironmentResolution(unittest.TestCase):
+    def test_resolution_matrix(self):
+        resolved_cases = [
+            ("valid explicit without configuration", " INTEGRATION ",
+             False, None, ApiEnvironment.INTEGRATION, False),
+            ("valid explicit matching configuration", "production",
+             True, " Production ", ApiEnvironment.PRODUCTION, False),
+            ("valid explicit beats conflicting configuration", "production",
+             True, "integration", ApiEnvironment.PRODUCTION, True),
+            ("valid explicit beats invalid configuration", "production",
+             True, "prod", ApiEnvironment.PRODUCTION, True),
+            ("valid explicit beats blank configuration", "production",
+             True, "", ApiEnvironment.PRODUCTION, True),
+            ("valid explicit beats none configuration", "production",
+             True, None, ApiEnvironment.PRODUCTION, True),
+            ("absent explicit and configuration use default", None,
+             False, None, ApiEnvironment.PRODUCTION, False),
+            ("valid configuration is used", None,
+             True, " INTEGRATION ", ApiEnvironment.INTEGRATION, False),
+        ]
+        rejected_cases = [
+            ("invalid explicit is rejected", "prod", True, "production", "prod"),
+            ("invalid configuration is rejected", None, True, "prod", "prod"),
+            ("blank configuration is rejected", None, True, "", ""),
+            ("whitespace configuration is rejected", None, True, "   ", ""),
+            ("none configuration is rejected", None, True, None, None),
+            ("false configuration is rejected", None, True, False, False),
+            ("zero configuration is rejected", None, True, 0, 0),
+        ]
+
+        for (name, explicit, configured_present, configured,
+             expected, warns) in resolved_cases:
+            with self.subTest(name), \
+                 patch("servicepytan.auth.logger.warning") as warning:
+                self.assertEqual(
+                    auth_module._resolve_api_environment(
+                        explicit,
+                        configured_present,
+                        configured,
+                        "test configuration",
+                    ),
+                    expected,
+                )
+                if warns:
+                    warning.assert_called_once()
+                else:
+                    warning.assert_not_called()
+
+        for (name, explicit, configured_present,
+             configured, error_value) in rejected_cases:
+            with self.subTest(name), \
+                 patch("servicepytan.auth.logger.warning") as warning:
+                with self.assertRaises(ValueError) as error_ctx:
+                    auth_module._resolve_api_environment(
+                        explicit,
+                        configured_present,
+                        configured,
+                        "test configuration",
+                    )
+                self.assertIn(
+                    f"value {error_value!r}",
+                    str(error_ctx.exception),
+                )
+                warning.assert_not_called()
 
 
 class TestAuthTokenCaching(unittest.TestCase):
@@ -300,6 +367,82 @@ class TestAuthTokenCaching(unittest.TestCase):
                 client_secret="client-secret",
                 timezone="UTC",
             )
+
+    def test_explicit_environment_wins_over_blank_environment_value(self):
+        environment = {
+            "SERVICETITAN_API_ENVIRONMENT": "",
+        }
+        dotenv_config = {
+            "SERVICETITAN_API_ENVIRONMENT": "integration",
+        }
+
+        with patch.dict("os.environ", environment, clear=True), \
+             patch(
+                 "servicepytan.auth.dotenv_values",
+                 return_value=dotenv_config,
+             ), \
+             self.assertLogs("servicepytan.auth", level="WARNING") as log_ctx:
+            conn = servicepytan_connect(
+                api_environment=ApiEnvironment.PRODUCTION,
+                app_key="app-key",
+                tenant_id="tenant-id",
+                client_id="client-id",
+                client_secret="client-secret",
+            )
+
+        self.assertEqual(conn.api_environment, ApiEnvironment.PRODUCTION)
+        self.assertIn(
+            "Ignoring configured SERVICETITAN_API_ENVIRONMENT=''",
+            "\n".join(log_ctx.output),
+        )
+
+    def test_present_none_dotenv_environment_is_rejected(self):
+        dotenv_config = {
+            "SERVICETITAN_API_ENVIRONMENT": None,
+        }
+
+        with patch.dict("os.environ", {}, clear=True), \
+             patch(
+                 "servicepytan.auth.dotenv_values",
+                 return_value=dotenv_config,
+             ), \
+             self.assertRaises(ValueError) as error_ctx:
+            servicepytan_connect(
+                app_key="app-key",
+                tenant_id="tenant-id",
+                client_id="client-id",
+                client_secret="client-secret",
+                timezone="UTC",
+            )
+
+        self.assertIn(
+            "SERVICETITAN_API_ENVIRONMENT value None from environment or .env",
+            str(error_ctx.exception),
+        )
+
+    def test_present_falsy_config_environments_are_rejected(self):
+        for configured_environment in (None, False, 0):
+            with self.subTest(configured_environment=configured_environment):
+                config = {
+                    "SERVICETITAN_APP_KEY": "app-key",
+                    "SERVICETITAN_TENANT_ID": "tenant-id",
+                    "SERVICETITAN_CLIENT_ID": "client-id",
+                    "SERVICETITAN_CLIENT_SECRET": "client-secret",
+                    "SERVICETITAN_API_ENVIRONMENT": configured_environment,
+                }
+
+                with patch("builtins.open", mock_open(read_data="{}")), \
+                     patch("servicepytan.auth.json.load", return_value=config), \
+                     self.assertRaises(ValueError) as error_ctx:
+                    servicepytan_connect(
+                        config_file="servicepytan_config.json",
+                    )
+
+                self.assertIn(
+                    f"SERVICETITAN_API_ENVIRONMENT value "
+                    f"{configured_environment!r}",
+                    str(error_ctx.exception),
+                )
 
     @patch("servicepytan.auth.request_auth_token")
     def test_reuses_token_until_safety_window(self, mock_request_auth_token):

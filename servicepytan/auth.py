@@ -180,11 +180,13 @@ class ServiceTitanConnection(Mapping):
 
 
 def _read_configured_routing(source, fallback=None):
-    fallback = fallback or {}
-    return {
-        key: source.get(key, fallback.get(key))
-        for key in ROUTING_VARIABLES
-    }
+    configured_routing = {}
+    for key in ROUTING_VARIABLES:
+        if key in source:
+            configured_routing[key] = source[key]
+        elif fallback is not None and key in fallback:
+            configured_routing[key] = fallback[key]
+    return configured_routing
 
 
 def _resolve_configured_value(
@@ -223,22 +225,47 @@ def _validate_api_environment(value, source):
         ) from None
 
 
-def _normalize_api_environment(value, source):
+def _normalize_api_environment(value):
     if isinstance(value, str):
-        value = value.strip().lower()
-        if not value:
-            _validate_api_environment(value, source)
+        return value.strip().lower()
     return value
+
+
+def _resolve_api_environment(
+    explicit, configured_present, configured_value, configured_source,
+):
+    if explicit is not None:
+        resolved = _validate_api_environment(
+            _normalize_api_environment(explicit),
+            "explicit argument",
+        )
+        if (configured_present and
+                _normalize_api_environment(configured_value) != resolved):
+            logger.warning(
+                "Ignoring configured SERVICETITAN_API_ENVIRONMENT=%r; "
+                "the explicit argument %r wins.",
+                configured_value,
+                explicit,
+            )
+        return resolved
+
+    if not configured_present:
+        return ApiEnvironment.PRODUCTION
+
+    normalized = _normalize_api_environment(configured_value)
+    resolved = _validate_api_environment(normalized, configured_source)
+    logger.info(
+        "Using configured SERVICETITAN_API_ENVIRONMENT=%r from %s.",
+        normalized,
+        configured_source,
+    )
+    return resolved
 
 
 def servicepytan_connect(
     api_environment: str=None,
     app_key:str=None, tenant_id:str=None, client_id:str=None, 
     client_secret:str=None, app_id:str=None, timezone:str=None, config_file:str=None):
-    requested_environment = _normalize_api_environment(
-        api_environment,
-        "explicit argument",
-    )
     requested_timezone = timezone
     configured_routing = {}
     configured_source = "configuration"
@@ -283,23 +310,12 @@ def servicepytan_connect(
         )
         configured_source = "environment or .env"
 
-    raw_configured_environment = configured_routing.get(
-        'SERVICETITAN_API_ENVIRONMENT',
-    )
-    configured_environment = _normalize_api_environment(
-        raw_configured_environment,
+    environment_key = 'SERVICETITAN_API_ENVIRONMENT'
+    resolved_environment = _resolve_api_environment(
+        api_environment,
+        environment_key in configured_routing,
+        configured_routing.get(environment_key),
         configured_source,
-    )
-    resolved_environment, environment_source = _resolve_configured_value(
-        'SERVICETITAN_API_ENVIRONMENT',
-        requested_environment,
-        configured_environment,
-        ApiEnvironment.PRODUCTION,
-        configured_source,
-    )
-    resolved_environment = _validate_api_environment(
-        resolved_environment,
-        environment_source,
     )
     resolved_timezone, _ = _resolve_configured_value(
         'SERVICETITAN_TIMEZONE',
