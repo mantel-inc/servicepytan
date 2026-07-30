@@ -375,6 +375,7 @@ def request_auth_token(auth_root_url: str, client_id, client_secret, retry_count
   """
 
   url: str = f"{auth_root_url}/connect/token"
+  logger.info("Fetching new ServiceTitan auth token from %s", url)
 
   headers: dict = {
     "Content-Type": "application/x-www-form-urlencoded",
