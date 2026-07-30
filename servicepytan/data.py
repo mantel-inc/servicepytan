@@ -10,7 +10,7 @@ class DataService:
   based on retrieving data between a date range.
 
   Attributes:
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection containing credentials and runtime auth state.
   """
   def __init__(self, conn=None):
     """Inits DataService with configuration file and authentication settings."""

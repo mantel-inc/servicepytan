@@ -24,7 +24,7 @@ class Report:
   Attributes:
       category: A string representing the report category. Find list of categories with get_report_categories().
       report_id: A string representing the report id. Find list of report_id using get_report_list().
-      conn: a dictionary containing the credential config.
+      conn: a ServiceTitanConnection containing credentials and runtime auth state.
   """
   def __init__(self, category, report_id, conn=None):
     """Inits DataService with configuration file and authentication settings."""
