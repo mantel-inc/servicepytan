@@ -85,6 +85,8 @@ class SessionTransportTests(unittest.TestCase):
                 status = test.statuses[min(test.calls - 1, len(test.statuses) - 1)]
                 time.sleep(test.delay)
                 self.send_response(status)
+                if status == 307:
+                    self.send_header("Location", "/other")
                 self.send_header("Content-Length", "12")
                 self.end_headers()
                 try:
@@ -93,6 +95,7 @@ class SessionTransportTests(unittest.TestCase):
                     pass
 
             do_DELETE = do_GET
+            do_POST = do_GET
 
             def log_message(self, *args):
                 pass
@@ -106,6 +109,13 @@ class SessionTransportTests(unittest.TestCase):
         auth = patch('servicepytan.utils.get_auth_headers', return_value={})
         auth.start()
         self.addCleanup(auth.stop)
+
+    def test_write_redirect_does_not_reach_second_url(self):
+        self.statuses = [307, 200]
+        with self.assertRaises(requests.HTTPError) as caught:
+            request_json(self.url, request_type='POST')
+        self.assertEqual(caught.exception.response.status_code, 307)
+        self.assertEqual(self.calls, 1)
 
     def test_safe_methods_retry_transient_status(self):
         for method in ('GET', 'DELETE'):
@@ -175,3 +185,45 @@ class EndpointTimeoutTests(unittest.TestCase):
         for invoke in calls:
             invoke()
             self.assertEqual(send.call_args.kwargs['timeout'], (5, 120))
+
+
+class RedirectTests(unittest.TestCase):
+    @patch('servicepytan.utils.get_auth_headers', return_value={})
+    @patch('servicepytan.utils.requests.request')
+    def test_write_redirects_are_rejected(self, send, auth):
+        for method in ('POST', 'PATCH', 'PUT'):
+            for status in (301, 302, 303, 307, 308):
+                with self.subTest(method=method, status=status):
+                    send.reset_mock()
+                    response = make_response(status, {})
+                    response.headers['Location'] = '/other'
+                    send.return_value = response
+                    with self.assertRaises(requests.HTTPError) as caught:
+                        request_json('https://example.com', request_type=method)
+                    self.assertIs(caught.exception.response, response)
+                    self.assertEqual(send.call_count, 1)
+                    self.assertFalse(send.call_args.kwargs['allow_redirects'])
+
+
+class ReportTimeoutTests(unittest.TestCase):
+    @patch('servicepytan.reports.endpoint_url', return_value='https://example.com')
+    @patch('servicepytan.reports.request_json_with_retry')
+    def test_report_timeout_reaches_metadata_and_every_page(self, send, url):
+        from servicepytan.reports import Report
+        send.side_effect = [
+            {},
+            {'data': [1], 'fields': [], 'totalCount': 2, 'hasMore': True},
+            {'data': [2], 'fields': [], 'totalCount': 2, 'hasMore': False},
+        ]
+        report = Report('category', 'id', timeout=(5, 120))
+        report.get_all_data(timeout=(5, 180))
+        self.assertEqual([c.kwargs['timeout'] for c in send.call_args_list],
+                         [(5, 120), (5, 180), (5, 180)])
+
+    @patch('servicepytan.reports.endpoint_url', return_value='https://example.com')
+    @patch('servicepytan.reports.request_json_with_retry', return_value={})
+    def test_report_retains_configured_timeout(self, send, url):
+        from servicepytan.reports import Report
+        report = Report('category', 'id', timeout=(5, 120))
+        report.get_data()
+        self.assertEqual(send.call_args.kwargs['timeout'], (5, 120))

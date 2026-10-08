@@ -89,7 +89,7 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     response = None
     request_error = None
     try:
-      response = send(request_type, url, data=payload, headers=headers, params=options, json=json_payload, timeout=timeout)
+      response = send(request_type, url, data=payload, headers=headers, params=options, json=json_payload, timeout=timeout, allow_redirects=safe_method)
     except requests.RequestException as error:
       request_error = error
     else:
@@ -129,6 +129,9 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         response.raise_for_status()
 
       try:
+        # Redirects can replay a write whose outcome we cannot verify.
+        if not safe_method and 300 <= response.status_code < 400:
+          raise requests.HTTPError("Unexpected redirect for ServiceTitan write", response=response)
         if response.status_code != requests.codes.ok:
           response.raise_for_status()
 

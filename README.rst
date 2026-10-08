@@ -63,3 +63,11 @@ retrying an ambiguous write.
 
 Catch ``requests.RequestException`` for transport failures: exhausted adapter
 retries can raise ``ConnectionError`` even when caused by a read timeout.
+
+Write redirects are rejected with ``HTTPError`` rather than followed, preventing
+HTTP 307/308 from silently replaying a write. The exception retains the response.
+
+Reports accept ``Report(category, report_id, timeout=(5, 120))`` for metadata and
+data requests. ``get_data(timeout=(5, 180))`` and ``get_all_data(timeout=(5, 180))``
+override that setting for data requests, including every page. The existing
+``timeout_min`` argument is separate and does not set an HTTP timeout.
