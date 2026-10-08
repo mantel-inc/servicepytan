@@ -1,6 +1,9 @@
 """Utility Functions for Supporting Other Modules"""
 import requests
 import time
+import threading
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from servicepytan.auth import (
   get_auth_headers,
   get_tenant_id,
@@ -11,6 +14,29 @@ import logging
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_TIMEOUT = (5, 60)
+RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "DELETE"})
+_sessions = threading.local()
+
+
+def _get_session(retry_count):
+  sessions = getattr(_sessions, 'sessions', None)
+  if sessions is None:
+    sessions = _sessions.sessions = {}
+  if retry_count not in sessions:
+    retries = retry_count - 1
+    retry = Retry(
+      total=retries, connect=retries, read=retries, status=retries, other=0,
+      status_forcelist=(502, 503, 504), allowed_methods=RETRY_METHODS,
+      backoff_factor=0.5, raise_on_status=False, respect_retry_after_header=False,
+    )
+    session = requests.Session()
+    for scheme in ('https://', 'http://'):
+      session.mount(scheme, HTTPAdapter(max_retries=retry))
+    sessions[retry_count] = session
+  return sessions[retry_count]
 
 
 def _response_detail(response, verbose, include_text=False):
@@ -24,7 +50,7 @@ def _response_detail(response, verbose, include_text=False):
   return detail
 
 
-def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3, verbose=True):
+def request_json(url, options={}, payload={}, conn=None, request_type="GET", json_payload={}, retry_count=3, verbose=True, timeout=DEFAULT_TIMEOUT):
   """Makes the request to the API and returns JSON
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -36,7 +62,11 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       conn: a ServiceTitanConnection or legacy credential mapping.
       request_type: A string to define the REST endpoint type [GET, POST, PUT, PATCH, DEL].
       json_payload: A dictionary defining the JSON payload to send
-      retry_count: An integer for the number of times to retry the request.
+      retry_count: Transport attempts per send, including the initial request (at least 1).
+          Also bounds 429 replays; a token refresh allows one extra send.
+      timeout: Connect and read timeout in seconds; read bounds silence between bytes.
+          PUT, POST and PATCH use fresh connections and only retry ConnectTimeout,
+          429, or a single token refresh. GET, HEAD, OPTIONS and DELETE use thread-local sessions.
 
   Returns:
       JSON Object
@@ -45,6 +75,13 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       TBD
   """
 
+  if not isinstance(retry_count, int) or retry_count < 1:
+    raise ValueError("retry_count must be a positive integer")
+  request_type = request_type.upper()
+  if request_type == "DEL":
+    request_type = "DELETE"
+  safe_method = request_type in RETRY_METHODS
+  send = _get_session(retry_count).request if safe_method else requests.request
   headers = get_auth_headers(conn)
   auth_retry_attempted = False
   attempt = 0
@@ -52,8 +89,8 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
     response = None
     request_error = None
     try:
-      response = requests.request(request_type, url, data=payload, headers=headers, params=options, json=json_payload)
-    except Exception as error:
+      response = send(request_type, url, data=payload, headers=headers, params=options, json=json_payload, timeout=timeout, allow_redirects=safe_method)
+    except requests.RequestException as error:
       request_error = error
     else:
       response_detail = _response_detail(
@@ -92,6 +129,9 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
         response.raise_for_status()
 
       try:
+        # Redirects can replay a write whose outcome we cannot verify.
+        if not safe_method and 300 <= response.status_code < 400:
+          raise requests.HTTPError("Unexpected redirect for ServiceTitan write", response=response)
         if response.status_code != requests.codes.ok:
           response.raise_for_status()
 
@@ -116,8 +156,15 @@ def request_json(url, options={}, payload={}, conn=None, request_type="GET", jso
       error_log = f"Error fetching data (url={url}, RETRY=({attempt} / {retry_count})): {response_detail}, error: {request_error}"
 
     logger.warning(error_log)
-    if attempt < retry_count:
-      time.sleep(1)
+    # The adapter owns retries for safe methods. A write may have reached ST
+    # even when its response was lost; only a connect timeout proves it did not.
+    rate_limited = response is not None and response.status_code == 429
+    connect_timeout = not safe_method and isinstance(request_error, requests.ConnectTimeout)
+    if attempt < retry_count and (rate_limited or connect_timeout):
+      delay = 0.5 * (2 ** (attempt - 1))
+      if rate_limited:
+        delay = Retry().get_retry_after(response) or delay
+      time.sleep(delay)
       continue
 
     if getattr(request_error, "response", None) is None:
@@ -202,7 +249,7 @@ def sleep_with_countdown(sleep_time):
   logger.info("")
   pass
 
-def request_json_with_retry(url, options={}, payload="", conn=None, request_type="GET", json_payload="", verbose=True):
+def request_json_with_retry(url, options={}, payload="", conn=None, request_type="GET", json_payload="", verbose=True, timeout=DEFAULT_TIMEOUT):
   """Makes the request to the API and returns JSON with a retry
 
   Retrieves JSON response from provided URL with a number of parameters to customize the request.
@@ -222,12 +269,6 @@ def request_json_with_retry(url, options={}, payload="", conn=None, request_type
   Raises:
       TBD
   """
-  response = request_json(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload, verbose=verbose)
-  if "traceId" in response:
-    if response['status'] == 429:
-        sleep_time = response['title'].split(" ")[-2]
-        logger.warning("Rate Limit Exceeded. Retrying in {} seconds...".format(sleep_time))
-        sleep_with_countdown(int(sleep_time))
-        response = request_json_with_retry(url, options=options, payload=payload, conn=conn, request_type=request_type, json_payload=json_payload, verbose=verbose)
-  
-  return response
+  return request_json(url, options=options, payload=payload, conn=conn,
+                      request_type=request_type, json_payload=json_payload,
+                      verbose=verbose, timeout=timeout)

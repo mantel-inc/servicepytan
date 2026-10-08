@@ -10,7 +10,7 @@ with open('README.rst') as readme_file:
 with open('HISTORY.rst') as history_file:
     history = history_file.read()
 
-requirements = ['Click>=7.0', 'requests', 'python-dateutil', 'pytz','python-dotenv','pyyaml']
+requirements = ['Click>=7.0', 'requests', 'urllib3>=1.26', 'python-dateutil', 'pytz','python-dotenv','pyyaml']
 
 test_requirements = [ ]
 

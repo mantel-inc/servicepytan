@@ -68,7 +68,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             "servicepytan.utils", level="WARNING",
         ) as log_ctx:
             result = request_json(
-                "https://api.example.com/resource", conn=conn, retry_count=1,
+                "https://api.example.com/resource", conn=conn, request_type="POST", retry_count=1,
             )
 
         self.assertEqual(result, {"ok": True})
@@ -109,7 +109,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
 
         with self.assertRaises(requests.HTTPError) as error_ctx:
             request_json(
-                "https://api.example.com/resource", conn=conn, retry_count=3,
+                "https://api.example.com/resource", conn=conn, request_type="POST", retry_count=3,
             )
 
         self.assertIs(error_ctx.exception, auth_error)
@@ -139,7 +139,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
 
         with self.assertRaises(requests.ConnectionError) as error_ctx:
             request_json(
-                "https://api.example.com/resource", conn=conn, retry_count=3,
+                "https://api.example.com/resource", conn=conn, request_type="POST", retry_count=3,
             )
 
         self.assertIs(error_ctx.exception, auth_error)
@@ -163,7 +163,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
         ]
 
         result = request_json(
-            "https://api.example.com/resource", conn=conn, retry_count=1,
+            "https://api.example.com/resource", conn=conn, request_type="POST", retry_count=1,
         )
 
         self.assertEqual(result, {"ok": True})
@@ -197,7 +197,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             "servicepytan.utils", level="WARNING",
         ) as log_ctx, self.assertRaises(requests.HTTPError):
             request_json(
-                "https://api.example.com/resource", conn=conn, retry_count=3,
+                "https://api.example.com/resource", conn=conn, request_type="POST", retry_count=3,
             )
 
         self.assertEqual(mock_request.call_count, 2)
@@ -240,7 +240,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
             request_json(
                 "https://api.example.com/resource",
                 conn=object(),
-                retry_count=3,
+                request_type="POST", retry_count=3,
                 verbose=False,
             )
 
@@ -281,11 +281,11 @@ class TestRequestJsonAuthentication(unittest.TestCase):
                 request_json(
                     "https://api.example.com/resource",
                     conn=conn,
-                    retry_count=3,
+                    request_type="POST", retry_count=3,
                 )
 
         self.assertEqual(
-            request_json("https://api.example.com/resource", conn=conn),
+            request_json("https://api.example.com/resource", conn=conn, request_type="POST"),
             {"ok": True},
         )
         self.assertEqual(mock_request_auth_token.call_count, 2)
@@ -307,7 +307,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
         mock_request.return_value = make_response(200, {"ok": True})
 
         with self.assertLogs("servicepytan.utils", level="INFO") as log_ctx:
-            request_json("https://api.example.com/resource", conn=object())
+            request_json("https://api.example.com/resource", conn=object(), request_type="POST")
 
         full_output = "\n".join(log_ctx.output)
         self.assertNotIn("SECRET_ACCESS_TOKEN", full_output)
@@ -329,7 +329,7 @@ class TestRequestJsonAuthentication(unittest.TestCase):
         with self.assertLogs("servicepytan.utils", level="WARNING") as log_ctx:
             with self.assertRaises(requests.HTTPError):
                 request_json(
-                    "https://api.example.com/resource", conn=object(), retry_count=1,
+                    "https://api.example.com/resource", conn=object(), request_type="POST", retry_count=1,
                 )
 
         full_output = "\n".join(log_ctx.output)

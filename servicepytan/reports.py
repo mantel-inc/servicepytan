@@ -1,5 +1,5 @@
 import math
-from servicepytan.utils import request_json, get_timezone_by_file, endpoint_url, request_json_with_retry
+from servicepytan.utils import request_json, get_timezone_by_file, endpoint_url, request_json_with_retry, DEFAULT_TIMEOUT
 
 import logging
 
@@ -26,9 +26,10 @@ class Report:
       report_id: A string representing the report id. Find list of report_id using get_report_list().
       conn: a ServiceTitanConnection containing credentials and runtime auth state.
   """
-  def __init__(self, category, report_id, conn=None):
+  def __init__(self, category, report_id, conn=None, timeout=DEFAULT_TIMEOUT):
     """Inits DataService with configuration file and authentication settings."""
     self.conn = conn
+    self.timeout = timeout
     # self.timezone = get_timezone_by_file(conn)
     self.category = category
     self.report_id = report_id
@@ -61,7 +62,7 @@ class Report:
     """get report metadata"""
     endpoint = f"report-category/{self.category}/reports/{self.report_id}"
     url = endpoint_url("reporting",endpoint, conn=self.conn)
-    return request_json_with_retry(url, conn=self.conn)
+    return request_json_with_retry(url, conn=self.conn, timeout=self.timeout)
 
   def show_param_types(self):
     """show parameter types"""
@@ -79,7 +80,7 @@ class Report:
       for value in accepted_values:
         logger.info(f"  - {value}")
 
-  def get_data(self, params="", page=1, page_size=5000):
+  def get_data(self, params="", page=1, page_size=5000, timeout=None):
     """get report data"""
     if params == "":
       params = self.params
@@ -87,9 +88,9 @@ class Report:
     endpoint = f"report-category/{self.category}/reports/{self.report_id}/data"
     url = endpoint_url("reporting",endpoint, conn=self.conn)
     return request_json_with_retry(url, options=options, json_payload=params, 
-              conn=self.conn, request_type="POST")
+              conn=self.conn, request_type="POST", timeout=self.timeout if timeout is None else timeout)
   
-  def get_all_data(self, params="", page_size=5000, timeout_min=60):
+  def get_all_data(self, params="", page_size=5000, timeout_min=60, timeout=None):
     """get all report data"""
     page = 1
     data = []
@@ -97,7 +98,7 @@ class Report:
     if params == "":
       params = self.params
     logger.info("Getting first page of data...")
-    response = self.get_data(params, page=page, page_size=page_size)
+    response = self.get_data(params, page=page, page_size=page_size, timeout=timeout)
     data.extend(response["data"])
     fields.extend(response["fields"])
     total = response["totalCount"]
@@ -119,7 +120,7 @@ class Report:
     while has_more:
       page += 1
       logger.info(f"Getting page {page} of {requests_needed}...")
-      response = self.get_data(params, page=page, page_size=updated_page_size)
+      response = self.get_data(params, page=page, page_size=updated_page_size, timeout=timeout)
       if(len(response["data"]) == 0):
         logger.info("No more data to retrieve.")
         break
