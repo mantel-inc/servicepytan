@@ -1,4 +1,4 @@
-from servicepytan.utils import request_json, check_default_options, endpoint_url
+from servicepytan.utils import request_json, check_default_options, endpoint_url, DEFAULT_TIMEOUT
 
 import logging
 
@@ -25,13 +25,13 @@ class Endpoint:
     self.conn = conn
 
   # Main Request Types
-  def get_one(self, id, modifier="", query={}, verbose=True):
+  def get_one(self, id, modifier="", query={}, verbose=True, timeout=DEFAULT_TIMEOUT):
     """Retrieve one record using the record id. Modifier is used for further endpoints."""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=modifier, conn=self.conn)
     options = check_default_options(query)
-    return request_json(url, options=options, payload="", conn=self.conn, request_type="GET", verbose=verbose)
+    return request_json(url, options=options, payload="", conn=self.conn, request_type="GET", verbose=verbose, timeout=timeout)
 
-  def get_many(self, query={}, id="", modifier=""):
+  def get_many(self, query={}, id="", modifier="", timeout=DEFAULT_TIMEOUT):
     """
     Retrieve one page of results with query options to customize.
 
@@ -41,55 +41,55 @@ class Endpoint:
     """
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=modifier, conn=self.conn)
     options = check_default_options(query)
-    return request_json(url, options, payload="", conn=self.conn, request_type="GET")
+    return request_json(url, options, payload="", conn=self.conn, request_type="GET", timeout=timeout)
   
-  def get_all(self, query={}, id="", modifier=""):
+  def get_all(self, query={}, id="", modifier="", timeout=DEFAULT_TIMEOUT):
     """Retrive all pages in your query."""
     query["page"] = "1"
     logger.info(query)
-    response = self.get_many(query=query, id=id, modifier=modifier)
+    response = self.get_many(query=query, id=id, modifier=modifier, timeout=timeout)
     data = response["data"]
     if data == []: return []
     has_more = response["hasMore"]
     while has_more:
       query["page"] = str(int(query["page"]) + 1)
       logger.info(query)
-      response = self.get_many(query=query, id=id, modifier=modifier)
+      response = self.get_many(query=query, id=id, modifier=modifier, timeout=timeout)
       data.extend(response["data"])
       has_more = response["hasMore"]
 
     return data
 
-  def create(self, payload):
+  def create(self, payload, timeout=DEFAULT_TIMEOUT):
     """Method that corresponds to a POST request for creating objects"""
     url = endpoint_url(self.folder, self.endpoint, conn=self.conn)
-    return request_json(url, options={}, json_payload=payload, conn=self.conn, request_type="POST")
+    return request_json(url, options={}, json_payload=payload, conn=self.conn, request_type="POST", timeout=timeout)
 
-  def update(self, id, payload, modifier="", request_type="PUT"):
+  def update(self, id, payload, modifier="", request_type="PUT", timeout=DEFAULT_TIMEOUT):
     """Method that corresponds to PUT or POST request for updating objects. Defaults to PUT"""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=modifier, conn=self.conn)
-    return request_json(url, options={}, payload=payload, conn=self.conn, request_type=request_type)
+    return request_json(url, options={}, payload=payload, conn=self.conn, request_type=request_type, timeout=timeout)
 
-  def delete(self, id, modifier=""):
+  def delete(self, id, modifier="", timeout=DEFAULT_TIMEOUT):
     """Method that corresponds to a DEL request for deleting objects"""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=f"{modifier}", conn=self.conn)
-    return request_json(url, options={}, payload="", conn=self.conn, request_type="DEL")
+    return request_json(url, options={}, payload="", conn=self.conn, request_type="DEL", timeout=timeout)
 
-  def delete_subitem(self, id, modifier_id, modifier):
+  def delete_subitem(self, id, modifier_id, modifier, timeout=DEFAULT_TIMEOUT):
     """Method that corresponds to a DEL request for deleting objects with subitems"""
     url = endpoint_url(self.folder, self.endpoint, id=id, modifier=f"{modifier}/{modifier_id}", conn=self.conn)
-    return request_json(url, options={}, payload="", conn=self.conn, request_type="DEL")
+    return request_json(url, options={}, payload="", conn=self.conn, request_type="DEL", timeout=timeout)
 
-  def export_one(self, export_endpoint, export_from="", include_recent_changes=False):
+  def export_one(self, export_endpoint, export_from="", include_recent_changes=False, timeout=DEFAULT_TIMEOUT):
     """Export Doc String"""
     url = endpoint_url(self.folder, "export", id="", modifier=f"{export_endpoint}", conn=self.conn)
-    return request_json(url, options={"from": export_from, "includeRecentChanges": include_recent_changes}, payload="", conn=self.conn, request_type="GET")
+    return request_json(url, options={"from": export_from, "includeRecentChanges": include_recent_changes}, payload="", conn=self.conn, request_type="GET", timeout=timeout)
 
-  def export_all(self, export_endpoint, export_from="", include_recent_changes=False):
+  def export_all(self, export_endpoint, export_from="", include_recent_changes=False, timeout=DEFAULT_TIMEOUT):
     """Export All Doc String"""
     counter = 1
     logger.info(f"{export_endpoint} {counter}: {export_from}")
-    response = self.export_one(export_endpoint, export_from, include_recent_changes)
+    response = self.export_one(export_endpoint, export_from, include_recent_changes, timeout=timeout)
     data = response["data"]
     if data == []: return []
     has_more = response["hasMore"]
@@ -97,7 +97,7 @@ class Endpoint:
       counter += 1
       export_from = response["continueFrom"]
       logger.info(f"{export_endpoint} {counter}: {export_from}")
-      response = self.export_one(export_endpoint, export_from, include_recent_changes)
+      response = self.export_one(export_endpoint, export_from, include_recent_changes, timeout=timeout)
       data.extend(response["data"])
       has_more = response["hasMore"]
     logger.info(f"Export Data Complete. {len(data)} rows exported.")
